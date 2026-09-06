@@ -248,4 +248,4 @@ class TestGetAIProvider:
     def test_default_model(self):
         charm = self._make({})
         assert charm._default_model("gemini") == "gemini-2.5-flash"
-        assert charm._default_model("openrouter") == "deepseek/deepseek-chat"
+        assert charm._default_model("openrouter") == "~deepseek/deepseek-v4-flash-latest"

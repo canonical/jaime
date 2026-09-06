@@ -36,7 +36,7 @@ class TestOpenRouterInit:
     def test_init_default_model(self):
         provider = OpenRouterProvider("test-token")
         assert provider._api_token == "test-token"
-        assert provider._model == "deepseek/deepseek-chat"
+        assert provider._model == "~deepseek/deepseek-v4-flash-latest"
 
     def test_init_custom_model(self):
         provider = OpenRouterProvider("test-token", "anthropic/claude-3.5-sonnet")
@@ -107,7 +107,7 @@ class TestOpenRouterGenerate:
         assert usage.completion_tokens == 7
         assert usage.total_tokens == 19
         assert usage.cost_usd == 0.00042
-        assert usage.model == "deepseek/deepseek-chat"
+        assert usage.model == "~deepseek/deepseek-v4-flash-latest"
 
     @patch("jaime.providers.openrouter.urllib.request.urlopen")
     def test_generate_posts_model_and_prompt(self, mock_urlopen):

@@ -4,6 +4,8 @@
 
 ### Changes
 
+- Change the default OpenRouter model from `deepseek/deepseek-chat` to `~deepseek/deepseek-v4-flash-latest`. The legacy model's shared free pool is routinely rate-limited upstream (HTTP 429), and v4-flash is effectively free with substantially more capacity; the `~` prefix tracks OpenRouter's latest v4-flash release
+- Replace em-dashes with colons in user-facing output: unit status messages (e.g. `Ready: no apps in watch-applications`), action results, and action failure messages (`no suggestion available: mode is 'observe'`). Em-dashes remain only in docstrings, comments, debug-log lines, and report prose
 - Adopt the `tests/unit` and `tests/integration` layout documented in `AGENTS.md`. Shared-library tests move out of `charms/machine/tests/` and `charms/k8s/tests/` into `tests/unit/`, leaving only genuinely charm-specific tests in the charm suites. `tests/unit` sees only `jaime-package` on its `pythonpath`, which proves the shared library does not depend on any charm-local module
 - Make the `CoreMixin` test declare its config inline instead of implicitly inheriting `charms/k8s/config.yaml` from the working directory
 - Repair the root test entrypoints. `tox.ini` pointed at a `tests/` and `src/` that no longer existed after the Phase 3 restructure, and the root `pyproject.toml` `testpaths` silently skipped the entire k8s suite. `tox` and `scripts/test.sh` now run all three suites
@@ -16,11 +18,16 @@
 
 ### Features
 
+- Change the default OpenRouter model from `deepseek/deepseek-chat` to `~deepseek/deepseek-v4-flash-latest`. The legacy model's shared free pool is routinely rate-limited upstream (HTTP 429), and v4-flash is effectively free with substantially more capacity; the `~` prefix tracks OpenRouter's latest v4-flash release
+- Block the k8s charm until its prerequisites are verified: the Juju observer credentials authenticate against the controller, every configured `watch-applications` name exists on the model, and the in-cluster service account can read pod logs via the shipped RoleBinding. A missing RoleBinding becomes a `BlockedStatus` naming the RBAC (`Kubernetes RBAC missing: ...`) instead of today's silent empty report sections, and resolving it releases the unit back to active. Transient controller/API hiccups still degrade to maintenance rather than blocking bootstrap. The connectivity checks run even when `watch-applications` is empty, so an unconfigured charm is never reported ready just because nothing is monitored
+- Add a `show-setup-steps` action to the k8s charm that prints the exact setup steps: Kubernetes RBAC, the read-only Juju observer user, granting the observer-password and AI-token secrets to the application, and configuring `watch-applications` and the AI provider. Read-only, pre-filled with the charm's own application and model names, link to RBAC Role and RoleBinding yaml definitions directly from the repository, and with `NEW_PASS` generated on the spot via `openssl rand -hex 16`
+- Block the k8s charm when a configured `watch-applications` name is absent from the model. The check runs on `config-changed` and every `update-status`, and lists the missing names; it stays silent while the controller is not yet reachable (missing observer credentials or a transient fetch failure), so bootstrap is not blocked
 - Add an integration test suite (`tests/integration/`) built on `jubilant`, covering the machine incident chain (fault → incident → report → suggestion), the flapping-workload case, recovery, the non-AI fallback path, and for Kubernetes both documented failure modes: rejected controller credentials and missing RBAC. Includes assertions that the API token never reaches a report or the audit log. Excluded from every default test path; run with `make integration`
 - Add `tests/unit/providers/test_openrouter.py`. The OpenRouter provider previously had no test coverage at all
 
 ### Bug fixes
 
+- Fix the `charms/k8s/README.md` observer block: `juju grant-secret` grants to an application, not a model, so target `jaime-k8s` instead of `${MODEL_NAME}`, and document granting the AI token secret the same way
 - Fix a misplaced import block in `charms/machine/src/jaime/collector.py`, where `jaime.logutils` was imported halfway down the file
 - Rename ambiguous `l` loop identifiers to `line` across the collectors and report generator
 

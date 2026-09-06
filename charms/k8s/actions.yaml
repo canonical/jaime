@@ -8,6 +8,9 @@ show-usage:
       type: string
       default: ""
       description: "Incident ID to filter by. If empty, returns the global summary."
+show-setup-steps:
+  description: "Print the exact setup steps for this charm: Kubernetes RBAC, Juju observer user, secrets, and configuration. Read-only."
+  params: {}
 get-suggestion:
   description: "Return the AI suggestion for the current open incident."
   params:

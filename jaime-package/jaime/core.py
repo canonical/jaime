@@ -214,7 +214,7 @@ class CoreMixin:
 
     @staticmethod
     def _default_model(provider_name):
-        mapping = {"gemini": "gemini-2.5-flash", "openrouter": "deepseek/deepseek-chat"}
+        mapping = {"gemini": "gemini-2.5-flash", "openrouter": "~deepseek/deepseek-v4-flash-latest"}
         return mapping.get(provider_name, "")
 
     # ------------------------------------------------------------------
@@ -552,7 +552,7 @@ class CoreMixin:
 
                 mode = Mode(self.model.config.get("mode", Mode.OBSERVE))
                 if mode == Mode.OBSERVE:
-                    event.fail("no suggestion available — mode is 'observe'")
+                    event.fail("no suggestion available: mode is 'observe'")
                     return
 
                 report_dir = self.model.config.get("report-dir", "") or "/var/log/jaime/reports"

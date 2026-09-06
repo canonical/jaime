@@ -33,8 +33,15 @@ class K8sApiClient:
         self._ca_path = f"{sa_dir}/ca.crt"
         self._timeout = timeout
 
-    def _request(self, path: str, params: dict | None = None) -> dict | str | None:
-        """GET from the API server. Returns parsed JSON, raw text, or None."""
+    def _request_raw(self, path: str, params: dict | None = None):
+        """GET from the API server, returning (status, body, content_type).
+
+        Unlike ``_request`` this does not swallow the HTTP status code: the
+        RBAC preflight needs to distinguish ``403 Forbidden`` (missing
+        RoleBinding) from a transport failure ``(None, ...)``. Any HTTP
+        response is returned as ``(status, body, content_type)``; a request
+        that never gets a response returns ``(None, None, None)``.
+        """
         url = f"{_API_BASE}{path}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
@@ -45,17 +52,68 @@ class K8sApiClient:
         try:
             with urllib.request.urlopen(req, context=ctx,
                                         timeout=self._timeout) as resp:
-                body = resp.read()
-                content_type = resp.headers.get("Content-Type", "")
-                if "application/json" in content_type:
-                    return json.loads(body)
-                return body.decode(errors="replace")
+                return (
+                    resp.status,
+                    resp.read().decode(errors="replace"),
+                    resp.headers.get("Content-Type", ""),
+                )
         except urllib.error.HTTPError as e:
             logger.debug("k8s API %s returned HTTP %s", path, e.code)
-            return None
+            return e.code, e.read().decode(errors="replace"), ""
         except Exception as e:
             logger.debug("k8s API %s failed: %s", path, e)
+            return None, None, None
+
+    def _request(self, path: str, params: dict | None = None) -> dict | str | None:
+        """GET from the API server. Returns parsed JSON, raw text, or None."""
+        status, body, content_type = self._request_raw(path, params)
+        if status is None or status != 200 or body is None:
             return None
+        if "application/json" in content_type:
+            try:
+                return json.loads(body)
+            except ValueError:
+                return body
+        return body
+
+    def check_access(self) -> tuple[str, str | None]:
+        """Verify the in-cluster service account has the reads collection needs.
+
+        Returns ``("ok", None)`` when everything is readable, or
+        ``("forbidden"|"unreachable", detail)`` otherwise. ``forbidden`` is an
+        RBAC problem the operator must fix (the RoleBinding is missing);
+        ``unreachable`` is a transient connectivity/server problem. This is
+        the explicit preflight behind TASKS 4.2's "Kubernetes API readable".
+        """
+        # The default Juju service account can list pods; a 403 here means the
+        # model namespace itself is unreachable for the account.
+        status, _, _ = self._request_raw(f"/api/v1/namespaces/{self.namespace}/pods")
+        if status is None:
+            return "unreachable", "cannot reach the Kubernetes API"
+        if status == 403:
+            return "forbidden", "cannot list pods (RoleBinding not applied)"
+        if status != 200:
+            return "unreachable", f"unexpected HTTP {status} listing pods"
+
+        # Pod logs are the high-value read; the default account cannot do it
+        # without the shipped RoleBinding. Probe the first pod in the
+        # namespace (Jaime's own pod is always there).
+        pods = self.list_pods()
+        if pods:
+            first = pods[0]["metadata"]["name"]
+            status, _, _ = self._request_raw(
+                f"/api/v1/namespaces/{self.namespace}/pods/{first}/log",
+                {"tailLines": 1},
+            )
+            if status is None:
+                return "unreachable", "cannot read pod logs"
+            if status == 403:
+                return "forbidden", (
+                    "cannot read pod logs (apply jaime-k8s-rbac.yaml)"
+                )
+            if status != 200:
+                return "unreachable", f"unexpected HTTP {status} reading pod logs"
+        return "ok", None
 
     def list_pods(self) -> list[dict]:
         """Return all pods in the model namespace."""

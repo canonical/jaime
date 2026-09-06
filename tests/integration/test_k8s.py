@@ -6,6 +6,9 @@ failure modes — missing Kubernetes RBAC and rejected controller credentials.
 Requires a bootstrapped Kubernetes controller (MicroK8s).
 """
 
+import pathlib
+import subprocess
+
 import jubilant
 import pytest
 
@@ -19,9 +22,24 @@ WATCHED_CHANNEL = "14/stable"
 JUJU_API_USER = "jaime-observer"
 JUJU_API_PASSWORD = "integration-test-password"
 
+_RBAC_PATH = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "charms"
+    / "k8s"
+    / "jaime-k8s-rbac.yaml"
+)
+
 
 def _jaime_unit() -> str:
     return f"{K8S_APP_NAME}/0"
+
+
+def _apply_rbac(juju, remove=False) -> None:
+    """Apply (or remove) the jaime-k8s Role/RoleBinding in the model namespace."""
+    cmd = ["kubectl", "delete" if remove else "apply", "-f", str(_RBAC_PATH)]
+    if not remove:
+        cmd += ["-n", juju.model]
+    subprocess.run(cmd, check=True, capture_output=True)
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +62,8 @@ def deployed_k8s(juju, k8s_charm, observer_credentials, ai_provider, ai_token):
 
     The RoleBinding in charms/k8s/jaime-k8s-rbac.yaml is bound to the
     jaime-k8s ServiceAccount, which Juju names after the application, so the
-    name is not free to change.
+    name is not free to change. The RBAC is applied so the prerequisite check
+    (TASKS 4.2) passes and the charm reaches active.
     """
     user, password = observer_credentials
 
@@ -125,24 +144,31 @@ class TestRejectedControllerCredentials:
 
 
 class TestMissingRbac:
-    """Without the RoleBinding, pod logs and events come back empty.
+    """Without the RoleBinding the prerequisite check (TASKS 4.2) must block.
 
-    This is the silent-failure mode that TASKS.md 4.2 exists to fix. The test
-    documents today's behaviour so the eventual preflight check has a
-    regression to flip.
+    Previously the charm degraded silently to empty log/event sections; the
+    explicit RBAC preflight replaced that with a blocked status naming the
+    missing prerequisite. Applying the RoleBinding must lift the unit back to
+    active.
     """
 
-    def test_report_still_generated_without_kube_access(self, deployed_k8s):
-        """Collection failure must degrade, not crash: a report is still written."""
-        try:
-            task = deployed_k8s.run(_jaime_unit(), "generate-report")
-        except jubilant.TaskError as e:
-            # Failing cleanly when no incident is open is correct behaviour.
-            # What must never happen is an unhandled traceback.
-            assert "no open incident" in str(e).lower()
-            assert "Traceback" not in str(e)
-            return
-        assert task.results.get("report-path")
+    def test_missing_rbac_blocks_the_unit(self, deployed_k8s):
+        _apply_rbac(deployed_k8s, remove=True)
+        deployed_k8s.wait(
+            lambda s: jubilant.all_blocked(s, K8S_APP_NAME),
+            timeout=10 * 60,
+        )
+        message = deployed_k8s.status().get_units(K8S_APP_NAME)[
+            _jaime_unit()
+        ].workload_status.message
+        assert "RBAC" in message
+
+    def test_restoring_rbac_recovers(self, deployed_k8s):
+        _apply_rbac(deployed_k8s)
+        deployed_k8s.wait(
+            lambda s: jubilant.all_active(s, K8S_APP_NAME),
+            timeout=10 * 60,
+        )
 
 
 class TestNoProviderFallback:
