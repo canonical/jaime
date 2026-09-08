@@ -256,9 +256,30 @@ The application **must** be named `jaime-k8s`: the RoleBinding in
 juju deploy jaime-k8s
 ```
 
-Both grants below are required, and they fail differently. Without the
-Kubernetes RBAC you get a report with empty log and event sections; without
-valid Juju credentials the charm reports a blocked status.
+### Actions
+
+```bash
+juju run jaime-k8s/0 show-setup-steps     # print the exact setup steps for this charm
+juju run jaime-k8s/0 show-status          # monitoring state
+juju run jaime-k8s/0 generate-report      # report for the open incident
+juju run jaime-k8s/0 get-suggestion       # AI diagnosis for the open incident
+juju run jaime-k8s/0 show-usage           # Show LLM API usage (tokens, cost...) per model
+juju run jaime-k8s/0 reset                # clear all incidents
+```
+
+Run `show-setup-steps` right after deploying: it prints the exact commands to
+give the charm read access to both APIs, hand the observer its secrets, and
+monitor your applications — with the model and application names already
+filled in:
+
+```bash
+juju run jaime-k8s/0 show-setup-steps
+```
+
+The steps below explain each part in detail. Both grants are required, and
+they fail differently: without the Kubernetes RBAC you get a report with empty
+log and event sections; without valid Juju credentials the charm reports a
+blocked status.
 
 ### Grant read access to the Kubernetes API
 
@@ -267,7 +288,7 @@ other pods there. Its default service account can only list pods; grant pod
 log/event/metrics access once per model:
 
 ```bash
-kubectl apply -f charms/k8s/jaime-k8s-rbac.yaml -n <model-name>
+kubectl apply -f https://raw.githubusercontent.com/canonical/jaime/main/charms/k8s/jaime-k8s-rbac.yaml -n <model-name>
 ```
 
 ### Grant read access to the Juju controller API
@@ -282,8 +303,8 @@ MODEL_NAME=<your-model>
 juju add-user jaime-observer
 juju grant jaime-observer read ${MODEL_NAME}
 
-# Set a password non-interactively
-NEW_PASS=<your-password>
+# Generate a password on the spot — or set your own here
+NEW_PASS=$(openssl rand -hex 16)
 echo "$NEW_PASS" | juju change-user-password jaime-observer --no-prompt
 
 # Pass the username and password (as a juju secret) to jaime-k8s
@@ -308,16 +329,6 @@ Monitoring is **opt-in**: an empty `watch-applications` list monitors nothing.
 
 ```bash
 juju config jaime-k8s watch-applications=postgresql-k8s,mysql-k8s
-```
-
-### Actions
-
-```bash
-juju run jaime-k8s/0 show-status          # monitoring state
-juju run jaime-k8s/0 generate-report      # report for the open incident
-juju run jaime-k8s/0 get-suggestion       # AI diagnosis for the open incident
-juju run jaime-k8s/0 show-usage           # Show LLM API usage (tokens, cost...) per model
-juju run jaime-k8s/0 reset                # clear all incidents
 ```
 
 ### k8s-specific configuration

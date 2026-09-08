@@ -147,7 +147,7 @@ def run_act(
                 "command": cmd,
                 "returncode": None,
                 "stdout": "",
-                "stderr": "dry-run — not executed",
+                "stderr": "dry-run: not executed",
             })
         else:
             logger.info("act: executing command: %s", cmd)

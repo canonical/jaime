@@ -543,7 +543,7 @@ Shared by both charms:
 ```yaml
 mode: observe                  # observe | suggest | act (act is blocked)
 provider: none                 # none | gemini | openrouter
-model: ""                      # defaults to gemini-2.5-flash / deepseek/deepseek-chat
+model: ""                      # defaults to gemini-2.5-flash / ~deepseek/deepseek-v4-flash-latest
 api-token: ""                  # secret:<id> or plain string
 watch-statuses: error,blocked
 failure-timeout-minutes: 5

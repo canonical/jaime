@@ -318,11 +318,12 @@ Make both charms pleasant to build, deploy and read output from.
 
 ### 4.2. Kubernetes deployment guidance
 
-- [ ] [charm] Add an action that emits the exact setup steps (RBAC, Juju user, secrets, config)
-- [ ] [charm] Block until prerequisites are verified: controller authenticated and Kubernetes API readable
-- [ ] [charm] Add an explicit RBAC preflight check instead of today's silent debug-level failure
-- [ ] [docs] Fix `charms/k8s/README.md` `grant-secret` target — it takes an application, not a model
-- [ ] [docs] Document granting the AI token secret to the application
+- [x] [charm] Add an action that emits the exact setup steps (RBAC, Juju user, secrets, config), with the observer password auto-generated via `openssl rand -hex 16`, the model name pre-filled, the RBAC applied directly from the repository URL
+- [x] [charm] Block when a configured `watch-applications` name does not exist on the model.
+- [x] [charm] Block until prerequisites are verified: controller authenticated and Kubernetes API readable, checked even when `watch-applications` is empty
+- [x] [charm] Add an explicit RBAC preflight check instead of today's silent debug-level failure
+- [x] [docs] Fix `charms/k8s/README.md` `grant-secret` target — it takes an application, not a model
+- [x] [docs] Document granting the AI token secret to the application
 
 ### 4.3. Machine charm controller access
 
@@ -405,4 +406,3 @@ Today a subordinate Jaime unit runs per principal unit, so a multi-unit applicat
 ### 6.2. Multi-application monitoring
 
 - [ ] [charm] Monitor a configured list of applications, as the k8s charm does
-

@@ -126,6 +126,71 @@ class TestK8sApiClient:
             assert client.get_resource_usage("app-0") == []
 
 
+class TestCheckAccess:
+    """The RBAC preflight (TASKS 4.2) behind "Kubernetes API readable"."""
+
+    def _raw(self, *codes):
+        """A _request_raw replacement yielding one result per call."""
+        calls = iter(codes)
+        return mock.Mock(side_effect=lambda *a, **k: next(calls))
+
+    def test_ok_when_pods_and_logs_readable(self):
+        client = _make_client()
+        with mock.patch.object(client, "_request_raw", self._raw(
+            (200, "{}", "application/json"),
+            (200, "log", "text/plain"),
+        )), mock.patch.object(client, "list_pods", return_value=[
+            {"metadata": {"name": "app-0"}}
+        ]):
+            assert client.check_access() == ("ok", None)
+
+    def test_forbidden_when_pod_list_denied(self):
+        client = _make_client()
+        with mock.patch.object(client, "_request_raw", self._raw(
+            (403, "Forbidden", "application/json"),
+        )):
+            kind, detail = client.check_access()
+        assert kind == "forbidden"
+        assert "list pods" in detail
+
+    def test_forbidden_when_pod_logs_denied(self):
+        """The shipped RoleBinding is needed for logs; default SA gets 403."""
+        client = _make_client()
+        with mock.patch.object(client, "_request_raw", self._raw(
+            (200, "{}", "application/json"),
+            (403, "Forbidden", "text/plain"),
+        )), mock.patch.object(client, "list_pods", return_value=[
+            {"metadata": {"name": "app-0"}}
+        ]):
+            kind, detail = client.check_access()
+        assert kind == "forbidden"
+        assert "pod logs" in detail
+
+    def test_unreachable_on_transport_error(self):
+        client = _make_client()
+        with mock.patch.object(client, "_request_raw", self._raw(
+            (None, None, None),
+        )):
+            kind, detail = client.check_access()
+        assert kind == "unreachable"
+
+    def test_unreachable_on_unexpected_status(self):
+        client = _make_client()
+        with mock.patch.object(client, "_request_raw", self._raw(
+            (503, "Service Unavailable", "text/plain"),
+        )):
+            kind, detail = client.check_access()
+        assert kind == "unreachable"
+
+    def test_ok_when_no_pods_to_probe_logs(self):
+        """An empty namespace cannot test logs, but the API itself is fine."""
+        client = _make_client()
+        with mock.patch.object(client, "_request_raw", self._raw(
+            (200, "{}", "application/json"),
+        )), mock.patch.object(client, "list_pods", return_value=[]):
+            assert client.check_access() == ("ok", None)
+
+
 _POD = {
     "metadata": {"name": "postgresql-k8s-0", "annotations": {"unit.juju.is/id": "postgresql-k8s/0"}},
     "spec": {

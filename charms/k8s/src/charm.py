@@ -27,6 +27,7 @@ from jaime.controller import (
 )
 from jaime.core import CoreMixin
 from jaime.incident import Incident
+from jaime.k8s_api import K8sApiClient
 from jaime.principal import StatusTracker
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
         self.framework.observe(self.on.show_status_action, self._on_action_show_status)
         self.framework.observe(self.on.show_usage_action, self._on_action_show_usage)
+        self.framework.observe(self.on.show_setup_steps_action, self._on_action_show_setup_steps)
         self.framework.observe(self.on.get_suggestion_action, self._on_action_get_suggestion)
         self.framework.observe(self.on.generate_report_action, self._on_action_generate_report)
         self.framework.observe(self.on.reset_action, self._on_action_reset)
@@ -55,9 +57,83 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
     def _on_update_status(self, event):
         self._monitor()
 
+    def _on_config_changed(self, event):
+        super()._on_config_changed(event)
+        if isinstance(self.unit.status, BlockedStatus):
+            return
+        prereq = self._prerequisite_error()
+        if prereq:
+            self.unit.status = BlockedStatus(prereq)
+
     def _watch_applications(self) -> list[str]:
         raw = self.model.config.get("watch-applications", "")
         return [a.strip() for a in raw.split(",") if a.strip()]
+
+    def _prerequisite_error(self) -> str | None:
+        """Return a blocked-status message while prerequisites are unmet.
+
+        Checks in order: (1) observer credentials are configured, (2) they
+        authenticate against the controller, (3) the in-cluster service
+        account can read the Kubernetes API, and (4) every
+        ``watch-applications`` name exists on the model. Absent names are
+        blocked as an explicit preflight instead of the old silent
+        "no units matched" status.
+
+        The connectivity checks (credentials, controller auth, Kubernetes API)
+        run whether or not ``watch-applications`` is set: the charm must not
+        report ready merely because nothing is monitored. Returns None when
+        everything is verified, or when the state is only transiently
+        unverifiable (controller/API unreachable, agent.conf not yet present)
+        so bootstrap never blocks on a hiccup; the monitoring status path
+        reports those.
+        """
+
+        # 1. Observer credentials must be configured.
+        username = self.model.config.get("juju-api-user", "")
+        password = self._resolve_juju_password()
+        if not username or not password:
+            return "juju-api-user and juju-api-password must be configured"
+
+        # 2. The controller must be reachable and the credentials accepted.
+        conf_path = agent_conf_path(unit_name=self.unit.name)
+        if conf_path is None:
+            return None
+        try:
+            conf = parse_agent_conf(conf_path)
+            with JujuControllerClient(
+                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
+            ) as client:
+                client.login(username, password)
+                full = client.full_status()
+        except ControllerAuthError:
+            return "juju-api credentials rejected by controller"
+        except Exception as e:
+            logger.debug("controller prerequisite check failed: %s", e)
+            return None
+
+        # 3. The in-cluster service account must be able to read the
+        #    Kubernetes API (RoleBinding applied).
+        try:
+            k8s = K8sApiClient()
+        except Exception as e:
+            logger.debug("k8s service account not available: %s", e)
+            return None
+        kind, detail = k8s.check_access()
+        if kind == "forbidden":
+            return f"Kubernetes RBAC missing: {detail}"
+        if kind == "unreachable":
+            logger.debug("k8s API not reachable yet: %s", detail)
+            return None
+
+        # 4. Last: every watch-applications name must exist on the model.
+        present = set(full.get("applications") or {})
+        missing = [a for a in self._watch_applications() if a not in present]
+        if missing:
+            return (
+                "watch-applications not found on model: "
+                + ", ".join(missing)
+            )
+        return None
 
     def _resolve_juju_password(self) -> str:
         """Resolve the Juju API password from config (plain or secret URI)."""
@@ -67,11 +143,19 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
     def _monitor(self):
         """Fetch statuses and drive the incident lifecycle for each unit."""
+        # Prerequisites first, whether or not anything is monitored: the charm
+        # must not report ready while the controller, RBAC, or Kubernetes API
+        # is in a bad state. Only after that does opt-out apply.
+        prereq = self._prerequisite_error()
+        if prereq:
+            self.unit.status = BlockedStatus(prereq)
+            return
+
         # Monitoring is opt-in: an empty watch-applications list means nothing
         # is monitored, never "all applications in the model".
         if not self._watch_applications():
             self.unit.status = ActiveStatus(
-                "Ready — no apps in watch-applications"
+                "Ready: no apps in watch-applications"
             )
             return
 
@@ -113,7 +197,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
         conf_path = agent_conf_path(unit_name=self.unit.name)
         if conf_path is None:
-            raise ControllerError("agent.conf not found — cannot locate controller")
+            raise ControllerError("agent.conf not found: cannot locate controller")
 
         conf = parse_agent_conf(conf_path)
         with JujuControllerClient(
@@ -146,6 +230,64 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         except Exception as e:
             logger.debug("could not fetch config for %s: %s", app_name, e)
             return {}
+
+    # ------------------------------------------------------------------
+    # Setup guidance
+    # ------------------------------------------------------------------
+
+    def _setup_guide(self) -> str:
+        """Return a copy-paste shell guide for configuring this charm.
+
+        Covers the four hard areas: Kubernetes RBAC, the read-only Juju user
+        for the controller API, the observer password and AI token as Juju
+        secrets granted to the application, and the charm config that drives
+        monitoring. All commands run on an operator machine with Juju and
+        kubectl access; the charm never executes them.
+
+        The model name is read at runtime (``JUJU_MODEL_NAME``), so the guide
+        arrives pre-filled for the model the charm is deployed in.
+        """
+        app = self.app.name
+        model = self.model.name or "<your-model-name>"
+        rbac_url = (
+            "https://raw.githubusercontent.com/canonical/jaime/main/"
+            "charms/k8s/jaime-k8s-rbac.yaml"
+        )
+        return "\n".join((
+            "# Jaime k8s setup guide: run on a machine with Juju and kubectl access.",
+            "# Replace the <...> placeholders first.",
+            "",
+            f"MODEL_NAME={model}",
+            "",
+            "# 1. Kubernetes RBAC: pod logs/events/metrics read access. The required Role/RoleBinding live",
+            "#    in the repository and are applied straight from there.",
+            f"kubectl apply -f {rbac_url} -n ${{MODEL_NAME}}",
+            "",
+            "# 2. Read-only Juju user for the controller API.",
+            "juju add-user jaime-observer",
+            "juju grant jaime-observer read ${MODEL_NAME}",
+            "# Generate a password on the spot, or set your own here.",
+            "NEW_PASS=$(openssl rand -hex 16)",
+            'echo "$NEW_PASS" | juju change-user-password jaime-observer --no-prompt',
+            "",
+            "# 3. Pass the observer credentials to the charm as a Juju secret.",
+            'SECRET_URI=$(juju add-secret jaime-juju-api password="$NEW_PASS")',
+            f"juju grant-secret jaime-juju-api {app}",
+            f'juju config {app} juju-api-user=jaime-observer juju-api-password="${{SECRET_URI}}"',
+            "",
+            "# 4. Choose which applications to monitor. Monitoring is opt-in:",
+            "#    empty watches nothing, never everything.",
+            f"juju config {app} watch-applications=postgresql-k8s,mysql-k8s",
+            "",
+            "# 5. Optional: enable AI suggestions. Grant the token secret to the application",
+            "AI_SECRET=$(juju add-secret jaime-token token=<your-api-token>)",
+            f"juju grant-secret jaime-token {app}",
+            f'juju config {app} mode=suggest provider=openrouter api-token="${{AI_SECRET}}"',
+        ))
+
+    def _on_action_show_setup_steps(self, event):
+        """Emit the exact setup steps for this charm. Read-only."""
+        event.set_results({"result": self._setup_guide()})
 
     # ------------------------------------------------------------------
     # Substrate hooks used by CoreMixin

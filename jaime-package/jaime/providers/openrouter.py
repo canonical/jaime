@@ -16,7 +16,7 @@ _ERROR_BODY_MAX = 500
 
 
 class OpenRouterProvider(AIProvider):
-    def __init__(self, api_token: str, model: str = "deepseek/deepseek-chat"):
+    def __init__(self, api_token: str, model: str = "~deepseek/deepseek-v4-flash-latest"):
         self._api_token = api_token
         self._model = model
 
