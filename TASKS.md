@@ -327,19 +327,45 @@ Make both charms pleasant to build, deploy and read output from.
 
 ### 4.3. Machine charm controller access
 
-**Deferred.** This reverses the standing `AGENTS.md` rule that the machine
-charm must not talk directly to the Juju controller API, and adds a
-credentials surface to a charm that currently needs none. Write a design note
-covering the tradeoff before implementing.
+**Accepted.** The machine charm may authenticate to the Juju controller as an
+external client. This lets it watch units it is not related to. The decision,
+the rejected filesystem alternative and the costs are recorded in
+`ARCHITECTURE.md` under Phase 4.
 
-- [ ] [project] Design note: hook tools vs controller API, credential handling, what co-located subordinate monitoring actually requires
-- [ ] [charm] Read unit status from the Juju controller API in the machine charm
-- [ ] [charm] Monitor co-located subordinate units on the same machine
-- [ ] [docs] Update the `AGENTS.md` rule and the `ARCHITECTURE.md` statement that this reverses
+Scope is bounded by reach. A machine unit monitors only units on its own host,
+because that is all its collectors can describe truthfully. See
+[Monitoring scope](ARCHITECTURE.md#monitoring-scope).
+
+`watch-applications` selects what to watch. Empty means the principal only, and
+needs no credentials. Named applications add co-located units of those
+applications. `*` adds every co-located unit. The principal is always watched.
+
+- [x] [project] Record the decision and tradeoff in `ARCHITECTURE.md`
+- [x] [docs] Update the `AGENTS.md` rule and the `ARCHITECTURE.md` statements it reverses
+- [ ] [charm] Add `watch-applications` to the machine charm, with the same name and opt-in rule as the k8s charm
+- [ ] [charm] Support `*` as the explicit "every co-located unit" value
+- [ ] [charm] Add `juju-api-user` and `juju-api-password`, required only when `watch-applications` is non-empty
+- [ ] [charm] Read unit status from the Juju controller API
+- [ ] [charm] Enumerate co-located units from `/var/lib/juju/agents/unit-*`, reusing the discovery code on the `experiment-monitor-subordinates` branch
+- [ ] [charm] Always watch the principal, whatever `watch-applications` is set to
+- [ ] [charm] Ignore named applications that have no unit on this host, and say so in the unit status
+- [ ] [charm] Block when credentials are missing or rejected, mirroring the k8s prerequisite check from 4.2
+- [ ] [test] Cover the credential-free default, name filtering, `*`, and deduplication
+- [ ] [docs] Document the host-only limit in `README.md`, so the boundary is not mistaken for a bug
 
 ### 4.4. Config consistency
 
-- [ ] [test] Assert shared option keys, types and defaults match across both charms
+4.3 and 4.6 each move divergent options into the shared set: `watch-applications`,
+`juju-api-user` and `juju-api-password` from 4.3, `diagnostics` from 4.6.
+
+Assert consistency over the *intersection* of the two charms' options, not a
+hardcoded key list. A key moving into the shared set is then covered
+automatically, and this task does not need rewriting each time.
+
+The description alignment below touches only keys that are already shared, so it
+is safe to do at any point.
+
+- [ ] [test] Assert shared option keys, types and defaults match across both charms, computed as the intersection rather than hardcoded
 - [ ] [charm] Align the drifted descriptions: `api-token`, `watch-statuses`, `log-window-minutes`, `report-dir`
 
 ### 4.5. Report content
@@ -361,6 +387,18 @@ from the `ARCHITECTURE.md` ideas list because it gates the CharmHub release.
 - [ ] [charm] Generate a diagnostics plan for watched applications and persist it
 - [ ] [python] Pass the plan into the k8s `collect_context` and honour it
 - [ ] [test] Cover plan-driven k8s collection, matching the machine charm's tests
+
+### 4.7. Monitoring transparency
+
+Both charms report `Ready` without saying what they watch. An operator cannot
+tell a healthy charm from a misconfigured one that is watching nothing. This
+gets worse once the machine charm can watch several applications.
+
+- [ ] [charm] Name the monitored applications in the machine charm's active status
+- [ ] [charm] Name the monitored applications in the k8s charm's active status
+- [ ] [charm] Report configured applications that matched no unit, rather than ignoring them silently
+- [ ] [charm] Include the resolved monitored set in the `show-status` action output
+- [ ] [test] Cover the status text for none, one and several applications
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
@@ -402,7 +440,3 @@ Today a subordinate Jaime unit runs per principal unit, so a multi-unit applicat
 - [ ] [python] Leader-owned usage accounting across all units
 - [ ] [python] Define the aggregation window across independent `update-status` cadences
 - [ ] [python] Keep unit-level detection; add cluster-level aggregation on top
-
-### 6.2. Multi-application monitoring
-
-- [ ] [charm] Monitor a configured list of applications, as the k8s charm does

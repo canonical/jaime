@@ -4,7 +4,7 @@
 
 Jaime observes Juju units, detects sustained unhealthy states, collects compact diagnostics, and generates structured incident reports. It ships as two charm variants that share one codebase:
 
-- **machine subordinate** (`charms/machine/`) — co-located with the principal on the same host. Reads the principal's workload status from local Juju hook tools (`goal-state`) and collects host diagnostics.
+- **machine subordinate** (`charms/machine/`) — co-located with the principal on the same host. Reads the principal's workload status from local Juju hook tools (`goal-state`) and collects host diagnostics. It can additionally watch other units on the same machine via the Juju controller API when the operator opts in — see [Monitoring scope](#monitoring-scope).
 - **Kubernetes standalone** (`charms/k8s/`) — runs as its own pod and monitors other applications in the same Juju model. Reads workload statuses from the Juju controller API and collects pod logs, events, and metrics from the Kubernetes API.
 
 Both variants are observe-first. AI is used to diagnose and to suggest, never to act: automatic remediation is not implemented, and `mode: act` is blocked until the Phase 7 safety controls exist.
@@ -23,6 +23,7 @@ Juju model
     └── jaime subordinate unit
         ├── charm event handlers
         ├── principal status monitor (goal-state)
+        ├── co-located unit monitor ──► Juju controller API, opt-in
         ├── context collector (host + plan-driven)
         ├── incident tracker
         ├── JSONL audit logger
@@ -125,7 +126,7 @@ Business logic should remain outside the charm event handlers where possible to 
 
 ### Dependencies
 
-The machine charm needs only `ops`. The k8s charm additionally needs `websocket-client` for the Juju controller API. Both API clients (Juju controller and Kubernetes) are hand-written against the stdlib rather than pulling in `python-libjuju` or the Kubernetes client library, and neither charm shells out to `kubectl`.
+Both charms need `ops`, and both need `websocket-client` for the Juju controller API. The machine charm carries that dependency even in its default configuration, where it never opens a controller connection: the wheel ships in the charm regardless, and paying a small packaging cost is preferable to two divergent requirement sets. Both API clients (Juju controller and Kubernetes) are hand-written against the stdlib rather than pulling in `python-libjuju` or the Kubernetes client library, and neither charm shells out to `kubectl`.
 
 ## Core loop
 
@@ -136,7 +137,7 @@ Algorithm:
 ```text
 on update-status:
   identify units to inspect
-    machine: related principal unit via local charm context / goal-state
+    machine: principal, plus co-located units per watch-applications
     k8s:     units of watch-applications via Juju controller API
 
   for each unit, read workload status
@@ -374,8 +375,62 @@ Primary source:
 - subordinate relation context
 - `goal-state`, filtered to the units actually related to this Jaime unit
 
-The machine charm does not authenticate to the controller as an external
-client.
+For units it is not related to, the machine charm reads workload status from the
+Juju controller API, under the same credential model as the Kubernetes charm.
+This is opt-in and off by default — see [Monitoring scope](#monitoring-scope).
+
+#### Monitoring scope
+
+A Jaime machine unit is bounded by what it can physically inspect. Every
+collector in `charms/machine/src/jaime/collector.py` reads the local host: unit
+logs from `/var/log/juju`, charm config and tracing from
+`/var/lib/juju/agents/`, and `df`, `free`, `ps`, `ss`, `systemctl` and the
+firewall tables from the machine it runs on.
+
+So a Jaime machine unit monitors only units on its own host. It does not watch
+units on other machines, and this is a deliberate limit rather than an
+unimplemented feature. Reading an unrelated unit's status from the controller is
+easy; producing a truthful report about it is not. The host-wide collectors are
+unit-agnostic, so a report for a remote unit would carry *this* machine's disk,
+memory, processes and firewall rules as evidence about a workload running
+somewhere else. That is worse than not monitoring it: an operator, or an LLM,
+would draw confident conclusions from the wrong machine.
+
+Model-wide coverage comes from deploying the subordinate to more principals, and
+a cluster-level view comes from Phase 6.1 leader aggregation. Neither requires a
+unit to reach beyond its host.
+
+Within that boundary, `watch-applications` selects what to monitor:
+
+| Value | Monitors | Needs controller |
+| --- | --- | --- |
+| `""` (default) | the related principal only | no |
+| `app1,app2` | the principal, plus co-located units of those applications | yes |
+| `*` | the principal, plus every co-located unit | yes |
+
+The principal is always monitored. It is the one unit the subordinate is
+explicitly related to, it is readable through `goal-state` with no credentials,
+and watching it is what the operator asked for by creating the relation.
+
+The default is therefore unchanged from today: an empty `watch-applications`
+opens no controller connection and needs no credentials. Credentials are
+required only when the value is non-empty, so the zero-config path is preserved
+for anyone who does not opt in.
+
+`*` is the explicit "everything I can reach" token. It is spelled `*` rather
+than `all` because a Juju application may legitimately be named `all`, while no
+application can be named `*`, so the token can never collide with a real name.
+
+This is the same option the Kubernetes charm has, with the same name, the same
+opt-in rule and the same meaning: *which applications, among those this unit can
+inspect, should it watch*. Only the reach differs, because the substrates
+differ. The Kubernetes charm can read any pod in the model's namespace; the
+machine charm can read its own host.
+
+Discovery and status are separate problems. Co-located units are enumerated by
+listing `/var/lib/juju/agents/unit-*`, which needs no credentials. Their
+workload status comes from the controller API, because under Juju 3.x it is not
+stored on the machine.
 
 ### Kubernetes standalone
 
@@ -448,7 +503,8 @@ summary with a per-model breakdown, or filters to a single incident.
 
 ```text
 Juju workload status
-  machine: goal-state          k8s: Client.FullStatus
+  machine: goal-state and/or   k8s: Client.FullStatus
+           Client.FullStatus
         ↓
 Status monitor (StatusTracker)
         ↓
@@ -560,21 +616,30 @@ Machine only:
 diagnostics: ""                # explicit diagnostics plan; empty means generate via AI
 ```
 
-Kubernetes only:
+Shared, but with substrate-specific reach:
 
 ```yaml
-watch-applications: ""         # comma-separated app names; empty monitors nothing
+watch-applications: ""         # comma-separated app names; "*" means all reachable
 juju-api-user: ""              # Juju user with read on the model
 juju-api-password: ""          # secret:<id> or plain string
 ```
+
+`watch-applications` names the applications to monitor among those the unit can
+inspect: any pod in the model's namespace for the Kubernetes charm, units on its
+own host for the machine charm. Credentials are required only when the value is
+non-empty — the machine charm's default therefore needs none. See
+[Monitoring scope](#monitoring-scope).
 
 Monitoring is deliberately opt-in. An empty `watch-applications` means **monitor
 nothing** and must never be interpreted as "all applications in the model" —
 silently watching everything on install would be a surprising and expensive
 default, and on a busy model it would generate reports and LLM calls the
-operator never asked for. If model-wide monitoring is wanted later, it should be
-requested explicitly with a distinct value such as `watch-applications: "*"`,
-never inferred from an empty string.
+operator never asked for. Model-wide monitoring is requested explicitly with
+`watch-applications: "*"`, never inferred from an empty string.
+
+The machine charm always monitors its related principal, whatever
+`watch-applications` says. That is not an exception to the opt-in rule but a
+consequence of it: relating the subordinate is the opt-in.
 
 ## Juju actions
 
@@ -665,7 +730,32 @@ Adopt the `tests/unit` and `tests/integration` split, move shared-library tests 
 
 Make both charms pleasant to build, deploy and read output from. Packaging that produces both artifacts without destroying either, Kubernetes deployment that tells the operator what it needs instead of failing silently, consistent configuration across both charms, richer incident reports, and diagnostics-plan parity so the Kubernetes charm collects to a plan as the machine charm already does.
 
-Machine-charm controller access is deferred: it reverses a standing rule and needs a design note first.
+Machine-charm controller access is accepted, having been deferred pending this
+decision. The machine charm may authenticate to the Juju controller as an
+external client, under the same credential model as the Kubernetes charm, so it
+can read the status of units it is not related to — most immediately other
+subordinates sharing its host.
+
+The alternative was tried first and does not work. The
+`experiment-monitor-subordinates` branch discovered co-located units by
+introspecting `/var/lib/juju/agents/` on the local filesystem, and was abandoned:
+under Juju 3.x a unit's workload status is not stored on the machine, and
+`goal-state` returns only units related to the executing charm. There is no
+hook-tool route to the status of an unrelated unit, so the choice is the
+controller API or nothing. Note that the branch's *discovery* worked; only the
+status read failed, so enumerating co-located units from the agents directory
+remains the right approach.
+
+The access is bounded by reach: a machine unit monitors only units on its own
+host, because that is all its collectors can describe truthfully. Watching a
+unit on another machine would attach this host's diagnostics to it. See
+[Monitoring scope](#monitoring-scope).
+
+What it costs: a credential surface on a charm that previously had none, and a
+`websocket-client` dependency shipped on every principal unit. Both are bounded
+by keeping the feature opt-in — the default empty `watch-applications` opens no
+controller connection and needs no credentials, leaving existing deployments
+unchanged.
 
 ## Phase 5 – CI/CD, integration tests and CharmHub release
 
@@ -673,7 +763,9 @@ Run all three unit suites and lint on every change, add integration tests that d
 
 ## Phase 6 – Clustered operation for machine charms
 
-Today a subordinate Jaime unit runs per principal unit, so a multi-unit application produces one independent incident, one LLM call and one report per unit, with no view of the cluster. Elect a leader that aggregates compacted context from its peers, makes a single LLM call per cluster incident, and owns the usage accounting. Then extend the machine charm to monitor a configured list of applications, as the Kubernetes charm does.
+Today a subordinate Jaime unit runs per principal unit, so a multi-unit application produces one independent incident, one LLM call and one report per unit, with no view of the cluster. Elect a leader that aggregates compacted context from its peers, makes a single LLM call per cluster incident, and owns the usage accounting.
+
+Multi-application monitoring is not part of this phase. It landed in 4.3, bounded to a unit's own host, because that is the only scope the machine collectors can report on truthfully. Cross-machine visibility is what leader aggregation provides. See [Monitoring scope](#monitoring-scope).
 
 ## Phase 7 – Assisted remediation
 

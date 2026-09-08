@@ -1,7 +1,7 @@
 # Jaime - Juju AI Medic Engine
 
 Jaime is a Juju diagnostic and incident reporting engine, available in two variants:
-- **machine subordinate** (`charms/machine/`) — co-located with a principal machine charm
+- **machine subordinate** (`charms/machine/`) — co-located with a principal machine charm, and optionally watching other units on the same host
 - **Kubernetes standalone** (`charms/k8s/`) — runs as its own pod and monitors other applications in the same Juju model
 
 Jaime observes and diagnoses. It does not remediate: `act` mode is blocked, and
@@ -140,9 +140,21 @@ or the configured model changes, so you can iterate by editing the text.
 | `cooldown-minutes` | `30` | Min time between reports for the same incident |
 | `log-window-minutes` | `30` | How far back to collect logs |
 | `max-context-lines` | `500` | Max lines per collected file/section |
+| `watch-applications` | `""` | Comma-separated apps to monitor; `*` means all reachable (empty = none on k8s, principal only on machine) |
 | `diagnostics` | `""` | JSON monitoring plan, machine charm only (empty = AI-generated on relation) |
 
 See `charms/machine/config.yaml` and `charms/k8s/config.yaml` for the full reference.
+
+### What each variant can see
+
+A machine subordinate monitors only units on **its own host**. Its collectors
+read the local machine — unit logs, `/var/lib/juju/agents`, `df`, `free`, `ps`,
+`ss`, systemd, firewall — so a report about a unit on another machine would
+carry this machine's diagnostics. That would be misleading, so it is not
+offered. Cover more machines by relating Jaime to more principals.
+
+The Kubernetes charm has no such limit: it reads any pod in the model's
+namespace through the Kubernetes API.
 
 ## Diagnostics plan
 
