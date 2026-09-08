@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "CI pins Python to match the charms' ubuntu@24.04 base, which ships 3.12. Bumping the CI runner alone would break parity with the deployed charm.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "python"
+      ],
+      "enabled": false
+    }
+  ]
+}
