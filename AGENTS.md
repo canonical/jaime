@@ -84,6 +84,28 @@ Descriptions should be short, factual, and written in the imperative style.
 
 When a conflict exists, `ARCHITECTURE.md` takes precedence.
 
+#### Architecture-driven development
+
+Development is architecture-driven: the design is agreed in `ARCHITECTURE.md`
+before the code that implements it is written.
+
+For any change that alters behaviour, an interface, a config option, or a
+stated boundary:
+
+1. Update `ARCHITECTURE.md` first, in its own commit or its own pull request.
+   Record what was decided, what was rejected, and what it costs.
+2. Get that agreed before writing the implementation.
+3. Update `TASKS.md` so the plan matches the decision.
+4. Then implement.
+
+The point is that a design can be rejected while it is still a paragraph. Do
+not describe behaviour that does not exist yet as though it does: planned work
+belongs in the Phase sections, and the descriptive sections are updated when the
+code lands.
+
+If the implementation turns out to contradict the architecture, stop and fix
+`ARCHITECTURE.md` first. Do not leave the two disagreeing.
+
 #### Other considerations
 
 Assume that other agents and humans may edit the repository.
@@ -280,8 +302,12 @@ Rules:
 - The machine charm (`charms/machine/`) and the k8s charm (`charms/k8s/`) are
   both supported; the k8s charm is standalone and monitors other applications
   in the same model.
-- The machine charm prefers Juju hook tools and local charm context and should
-  not talk directly to the Juju controller API unless explicitly required.
+- The machine charm prefers Juju hook tools and local charm context, but can
+  also talk directly to the Juju controller API, which is particularly needed
+  for other subordinate charms on the same machine.
+- The machine charm monitors only units on its own host. Its collectors read the
+  local machine, so a report about a unit elsewhere would carry this machine's
+  diagnostics. Do not add model-wide watching to it.
 - The k8s charm reads workload statuses from the Juju controller API via a
   dedicated user account (it has no relation to other applications).
 - Keep observe mode as the default.
