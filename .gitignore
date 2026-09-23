@@ -252,3 +252,4 @@ charms/k8s/src/jaime/providers/
 .coding_sessions
 .coding_sessoins/*
 .env
+.opencode
