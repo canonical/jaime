@@ -156,6 +156,12 @@ offered. Cover more machines by relating Jaime to more principals.
 The Kubernetes charm has no such limit: it reads any pod in the model's
 namespace through the Kubernetes API.
 
+If a machine hosts several principal units and Jaime is related to more than one
+of them, Juju places a Jaime unit alongside each. With `watch-applications` set,
+those units would monitor the same host and report the same fault twice. Jaime
+flags this in its unit status; relate it to one principal per machine to avoid
+it.
+
 ## Diagnostics plan
 
 The diagnostics plan drives what gets collected. It can be:

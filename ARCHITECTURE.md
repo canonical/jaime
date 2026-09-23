@@ -412,6 +412,12 @@ The principal is always monitored. It is the one unit the subordinate is
 explicitly related to, it is readable through `goal-state` with no credentials,
 and watching it is what the operator asked for by creating the relation.
 
+A configured application with no unit in reach is skipped silently. The unit
+status names what is being monitored, and absence from that list is what tells
+the operator a name did not match. Treating an unmatched name as a fault would
+block a charm that is working correctly, which is wrong whenever an application
+is configured before it is deployed.
+
 The default is therefore unchanged from today: an empty `watch-applications`
 opens no controller connection and needs no credentials. Credentials are
 required only when the value is non-empty, so the zero-config path is preserved
@@ -427,10 +433,36 @@ inspect, should it watch*. Only the reach differs, because the substrates
 differ. The Kubernetes charm can read any pod in the model's namespace; the
 machine charm can read its own host.
 
-Discovery and status are separate problems. Co-located units are enumerated by
-listing `/var/lib/juju/agents/unit-*`, which needs no credentials. Their
-workload status comes from the controller API, because under Juju 3.x it is not
-stored on the machine.
+Co-located units are resolved from the controller's `Client.FullStatus`, which
+is already fetched for their workload status. Each unit carries a `machine`
+field, and subordinate units are nested under their principal unit's
+`subordinates` map rather than appearing in their own application's `units`.
+Jaime reads its own machine from `JUJU_MACHINE_ID`, keeps the units whose
+machine matches, and excludes its own unit.
+
+There is no hook-tool route to this, which was verified rather than assumed.
+`goal-state` exposes unit-level workload status only between a subordinate and
+its principal. Relating a subordinate directly to another subordinate is
+permitted by Juju and creates no extra units, but the sibling then appears only
+as an *application* entry carrying a *relation* status, which does not change
+when that workload fails. The principal sees both subordinates' unit statuses;
+neither subordinate sees the other's. Under Juju 3.x a unit's workload status is
+not stored on the machine either, so the agents directory cannot supply it. The
+controller API is the only source, which the Juju team has confirmed. The
+evidence is recorded under Phase 4.
+
+#### Multiple Jaime units on one machine
+
+A machine may host more than one principal unit, and Jaime may be related to
+several of them. Juju then places one Jaime unit per principal unit, so two
+Jaime units can share a host. With `watch-applications` set, both would monitor
+the same co-located units and open duplicate incidents for the same fault,
+which means duplicate reports and duplicate LLM calls.
+
+This is a known limitation, not a solved problem. Jaime detects the case and
+reports it in its unit status rather than silently double-billing. Deduplicating
+properly needs the peer relation introduced in Phase 6.1, so it is deferred to
+there.
 
 ### Kubernetes standalone
 
@@ -739,12 +771,59 @@ subordinates sharing its host.
 The alternative was tried first and does not work. The
 `experiment-monitor-subordinates` branch discovered co-located units by
 introspecting `/var/lib/juju/agents/` on the local filesystem, and was abandoned:
-under Juju 3.x a unit's workload status is not stored on the machine, and
-`goal-state` returns only units related to the executing charm. There is no
-hook-tool route to the status of an unrelated unit, so the choice is the
-controller API or nothing. Note that the branch's *discovery* worked; only the
-status read failed, so enumerating co-located units from the agents directory
-remains the right approach.
+under Juju 3.x a unit's workload status is not stored on the machine, so
+enumerating the agents directory yields names but no health. The Juju team has
+confirmed there is no hook-tool route to the status of a unit this charm is not
+the subordinate of.
+
+Relating Jaime directly to the other subordinates was tested and rejected. Juju
+permits a subordinate-to-subordinate relation through the implicit `juju-info`
+endpoint, and it creates no extra units, so the mechanism works. It carries no
+health signal. With `logrotated` related to `jaime` and driven to `blocked`:
+
+```text
+$ juju status
+logrotated/0*  blocked  idle  5.5.5.189  fault
+
+$ juju exec -u jaime/0 -- 'goal-state --format json'
+"logrotated": { "status": "joined", "since": "2026-09-23 12:54:47Z" }
+```
+
+`joined` is a relation status, and its timestamp is the join time. There is no
+`logrotated/0` unit entry at all, and the output was byte-identical before and
+after the fault. The principal's view, by contrast, carries both subordinates at
+unit level with workload status. A subordinate cannot see a sibling's health;
+only its principal can.
+
+A related observation from the same run: Jaime's `goal-state` returned identical
+content under both the `principal` and `juju-info` endpoints, listing
+`logrotated` under `principal` even though the relation was on a different
+endpoint. The `own_principal_units` filter in `_log_principal_status` is
+therefore load-bearing, not defensive.
+
+A satellite charm holding the controller connection was considered and rejected.
+The proposal was to deploy a charm into the controller model, let it read all
+statuses, and have Jaime consume them over a relation instead of creating a Juju
+user. A unit agent authenticates as `unit-<app>-<n>` and has no privileged API
+access regardless of which model it runs in, the controller model being just a
+model, so the satellite would need the same `juju-api-user` credentials. It
+relocates the credential rather than removing it. The one path to elevated
+access, reading the controller machine agent's `agent.conf`, is a deliberate
+privilege escalation and is out of bounds.
+
+The useful idea inside it, one controller connection per cycle rather than one
+per unit, belongs in Phase 6.1, where the leader can query once and publish to
+peers over the existing peer relation, with no new charm.
+
+Shipping a third charm was also considered and rejected: a non-subordinate
+`jaime-machine` placed on each machine, monitoring everything on
+it. It would have removed the duplicate-monitoring case below by construction.
+It was rejected because it weakens clustering. A subordinate's unit topology
+mirrors the application it is related to, so relating once gives exactly one
+Jaime per principal unit, including units added later. A placed charm mirrors
+infrastructure instead: coverage becomes manual, a machine missed at deploy time
+yields partial cluster context with no warning, and one unit would aggregate
+across unrelated workloads. Phase 6.1 depends on that 1:1 topology.
 
 The access is bounded by reach: a machine unit monitors only units on its own
 host, because that is all its collectors can describe truthfully. Watching a
@@ -764,6 +843,10 @@ Run all three unit suites and lint on every change, add integration tests that d
 ## Phase 6 – Clustered operation for machine charms
 
 Today a subordinate Jaime unit runs per principal unit, so a multi-unit application produces one independent incident, one LLM call and one report per unit, with no view of the cluster. Elect a leader that aggregates compacted context from its peers, makes a single LLM call per cluster incident, and owns the usage accounting.
+
+Aggregation is keyed by the monitored application, not by the peer set. All units of the Jaime subordinate share one peer relation, including units attached to different principals, so a Jaime related to both `postgresql` and `redis` has all of them as peers. Aggregating the peer set would merge unrelated workloads into one incident.
+
+This phase also owns deduplication when two Jaime units share a machine. See [Multiple Jaime units on one machine](#multiple-jaime-units-on-one-machine).
 
 Multi-application monitoring is not part of this phase. It landed in 4.3, bounded to a unit's own host, because that is the only scope the machine collectors can report on truthfully. Cross-machine visibility is what leader aggregation provides. See [Monitoring scope](#monitoring-scope).
 

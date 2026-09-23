@@ -346,11 +346,18 @@ applications. `*` adds every co-located unit. The principal is always watched.
 - [ ] [charm] Support `*` as the explicit "every co-located unit" value
 - [ ] [charm] Add `juju-api-user` and `juju-api-password`, required only when `watch-applications` is non-empty
 - [ ] [charm] Read unit status from the Juju controller API
-- [ ] [charm] Enumerate co-located units from `/var/lib/juju/agents/unit-*`, reusing the discovery code on the `experiment-monitor-subordinates` branch
+- [ ] [python] Walk each unit's `subordinates` in `extract_unit_statuses`. Subordinate units are nested under their principal unit, so today the function returns none of them. They are the main thing 4.3 exists to watch
+- [ ] [python] Return each unit's `machine` field from `extract_unit_statuses`, so units can be filtered to this host
+- [ ] [charm] Read Jaime's own machine from `JUJU_MACHINE_ID` via `ops` `JujuContext.machine_id`, not by parsing `agent.conf`
+- [ ] [charm] Resolve co-located units from `Client.FullStatus` filtered by machine. No filesystem enumeration is needed, since the status call already carries the machine field
+- [ ] [charm] Exclude Jaime's own unit, using the existing `exclude_applications` argument
+- [ ] [charm] Strengthen the comment on the `own_principal_units` filter in `_log_principal_status`. `goal-state` returns identical content under both endpoints, so the filter is what stops a co-located subordinate being processed as a principal unit
 - [ ] [charm] Always watch the principal, whatever `watch-applications` is set to
-- [ ] [charm] Ignore named applications that have no unit on this host, and say so in the unit status
+- [ ] [charm] Detect other Jaime units on the same machine and report it in the unit status. Two Jaime units on one host would open duplicate incidents. Deduplication needs the peer relation and is deferred to 6.1
 - [ ] [charm] Block when credentials are missing or rejected, mirroring the k8s prerequisite check from 4.2
-- [ ] [test] Cover the credential-free default, name filtering, `*`, and deduplication
+- [ ] [test] Add a machine-model `FullStatus` fixture with machines and nested subordinates. The existing `_FULL_STATUS` is Kubernetes-shaped and exercises neither
+- [ ] [test] Cover the credential-free default, name filtering, `*`, self-exclusion and host filtering
+- [ ] [docs] Update `docs/config.md` once the options land: it documents none of `watch-applications`, `juju-api-user`, `juju-api-password` or `diagnostics`, so leaving it would make it contradict the charm rather than merely lag it
 - [ ] [docs] Document the host-only limit in `README.md`, so the boundary is not mistaken for a bug
 
 ### 4.4. Config consistency
@@ -394,11 +401,29 @@ Both charms report `Ready` without saying what they watch. An operator cannot
 tell a healthy charm from a misconfigured one that is watching nothing. This
 gets worse once the machine charm can watch several applications.
 
+Naming what is monitored is the whole signal. A configured application with no
+unit in reach is skipped silently rather than reported as an error: its absence
+from the status is what tells the operator, and treating a not-yet-deployed
+application as a fault would block a charm that is working correctly.
+
 - [ ] [charm] Name the monitored applications in the machine charm's active status
 - [ ] [charm] Name the monitored applications in the k8s charm's active status
-- [ ] [charm] Report configured applications that matched no unit, rather than ignoring them silently
+- [ ] [charm] Skip configured applications with no unit in reach, silently. Do not block, and do not add a warning status for them
 - [ ] [charm] Include the resolved monitored set in the `show-status` action output
 - [ ] [test] Cover the status text for none, one and several applications
+- [ ] [test] Cover a configured application with no unit in reach, asserting it is absent from the status and does not block
+
+### 4.8. Documentation accuracy
+
+The acceptance tests in `ARCHITECTURE.md` and the reference pages under `docs/`
+have drifted from the shipped charms. Nothing links to `docs/` from any other
+file, which is why it rots unnoticed.
+
+- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`. It does not mention the option at all, so 4.3's headline feature has no end-to-end check
+- [ ] [test] Fix step 8 of the Kubernetes acceptance test. It still says empty report sections indicate missing RBAC, which 4.2 replaced with a blocked status
+- [ ] [docs] Rewrite `docs/actions.md`. It documents one of the eight shipped actions, and is wrong about what `diagnose` returns
+- [ ] [docs] Link `docs/` from `README.md` and `CONTRIBUTING.md`, so the reference pages are reachable and drift is noticed
+- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`, which appears under both Changes and Features
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
@@ -425,7 +450,7 @@ gets worse once the machine charm can watch several applications.
 Gated on 4.2, 4.4 and 4.6.
 
 - [ ] [project] Publish both charms to CharmHub with tracks and channels
-- [ ] [docs] Per-charm CharmHub page content
+- [x] [docs] Per-charm CharmHub page content
 
 ## 6. Phase 6 — Clustered operation for machine charms
 
@@ -435,6 +460,8 @@ Today a subordinate Jaime unit runs per principal unit, so a multi-unit applicat
 
 - [ ] [charm] Add a peer relation to the machine subordinate
 - [ ] [charm] Followers publish compacted local context; the leader aggregates it
+- [ ] [charm] Key aggregation by monitored application, not by the peer set. Jaime units attached to different principals share one peer relation, so aggregating the peer set would merge unrelated workloads
+- [ ] [charm] Deduplicate when two Jaime units share a machine, which 4.3 only detects and reports
 - [ ] [charm] Make one LLM call per cluster incident, owned by the leader
 - [ ] [charm] Keep incident state in the peer application databag so it survives leader change
 - [ ] [python] Leader-owned usage accounting across all units
