@@ -5,12 +5,21 @@ import datetime
 import json
 import logging
 
+from ops import JujuContext
 from ops.charm import CharmBase
 from ops.hookcmds import goal_state
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus
 
 from jaime.collector import collect_context
+from jaime.controller import (
+    ControllerAuthError,
+    ControllerError,
+    JujuControllerClient,
+    agent_conf_path,
+    extract_unit_statuses,
+    parse_agent_conf,
+)
 from jaime.core import CoreMixin
 from jaime.diagnostics import (
     build_prompt,
@@ -52,23 +61,212 @@ class JaimeCharm(CoreMixin, CharmBase):
     # Monitoring
     # ------------------------------------------------------------------
 
+    def _on_config_changed(self, event):
+        """Validate config, then surface a broken controller prerequisite.
+
+        Credentials are only required once the operator opts in to watching
+        co-located units, so the zero-config path is never blocked. Mirrors
+        the k8s charm, where the same check is unconditional because that
+        charm always needs the controller.
+        """
+        super()._on_config_changed(event)
+        if isinstance(self.unit.status, BlockedStatus):
+            return
+        prereq = self._prerequisite_error()
+        if prereq:
+            self.unit.status = BlockedStatus(prereq)
+
     def _on_update_status(self, event):
         try:
             relations = list(self.model.relations.get("principal", []))
         except Exception:
             relations = []
 
-        if relations:
-            self._log_principal_status()
-        else:
+        if not relations:
             self.unit.status = MaintenanceStatus("waiting for principal relation")
+            return
+
+        # The principal is always monitored, and always from the local
+        # goal-state hook tool: it needs no credentials and keeps working
+        # when the controller is unreachable.
+        self._log_principal_status()
+
+        # Co-located units are opt-in and read from the controller API.
+        # Empty watch-applications means no controller connection at all.
+        if not self._watch_applications():
+            return
+
+        prereq = self._prerequisite_error()
+        if prereq:
+            self.unit.status = BlockedStatus(prereq)
+            return
+
+        try:
+            statuses, other_jaime = self._fetch_co_located_statuses()
+        except ControllerAuthError as e:
+            logger.error("Juju controller authentication failed: %s", e)
+            self.unit.status = BlockedStatus(
+                "juju-api credentials rejected by controller"
+            )
+            return
+        except ControllerError as e:
+            logger.warning("could not fetch co-located unit statuses: %s", e)
+            self.unit.status = MaintenanceStatus(str(e)[:100])
+            return
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for unit_name, info in statuses.items():
+            self._process_unit(unit_name, info["status"], info.get("since") or now_iso)
+
+        self._report_other_jaime_units(other_jaime)
+
+    def _watch_applications(self) -> list[str]:
+        """Applications named in watch-applications, in config order."""
+        raw = self.model.config.get("watch-applications", "")
+        return [a.strip() for a in raw.split(",") if a.strip()]
+
+    def _resolve_juju_password(self) -> str:
+        """Resolve the Juju API password from config (plain or secret URI)."""
+        return self._resolve_secret(
+            self.model.config.get("juju-api-password", ""), "password"
+        )
+
+    def _machine_id(self) -> str | None:
+        """This unit's machine id (JUJU_MACHINE_ID), via the ops JujuContext.
+
+        Returns None when the full hook environment is absent (for example in
+        unit tests). Callers treat that as a hard failure rather than skipping
+        host filtering, so a unit with no host identity is never monitored.
+        """
+        try:
+            return JujuContext.from_environ().machine_id
+        except ValueError:
+            return None
+
+    def _prerequisite_error(self) -> str | None:
+        """Return a blocked-status message while the controller is unusable.
+
+        Only applies when the operator has opted in to watching co-located
+        units, since the default path needs no controller. Credentials are
+        checked first, then whether the controller accepts them. A missing
+        agent.conf or an unreachable controller is treated as transient and
+        left to the monitoring path, matching the k8s charm.
+        """
+        if not self._watch_applications():
+            return None
+
+        username = self.model.config.get("juju-api-user", "")
+        password = self._resolve_juju_password()
+        if not username or not password:
+            return "juju-api-user and juju-api-password must be configured"
+
+        conf_path = agent_conf_path(unit_name=self.unit.name)
+        if conf_path is None:
+            return None
+        try:
+            conf = parse_agent_conf(conf_path)
+            with JujuControllerClient(
+                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
+            ) as client:
+                client.login(username, password)
+        except ControllerAuthError:
+            return "juju-api credentials rejected by controller"
+        except Exception as e:
+            logger.debug("controller prerequisite check failed: %s", e)
+            return None
+        return None
+
+    def _fetch_co_located_statuses(self) -> tuple[dict[str, dict], list[str]]:
+        """Fetch statuses of co-located units, and any other Jaime units.
+
+        Returns ``(statuses, other_jaime)``. ``statuses`` is filtered to this
+        unit's machine and excludes Jaime itself; the principal is excluded
+        too because it is already handled by ``_log_principal_status``, and
+        processing it twice per cycle would corrupt its incident counters.
+        """
+        username = self.model.config.get("juju-api-user", "")
+        password = self._resolve_juju_password()
+        if not username or not password:
+            raise ControllerError(
+                "juju-api-user and juju-api-password must be configured"
+            )
+
+        conf_path = agent_conf_path(unit_name=self.unit.name)
+        if conf_path is None:
+            raise ControllerError("agent.conf not found: cannot locate controller")
+
+        conf = parse_agent_conf(conf_path)
+        with JujuControllerClient(
+            conf["api_address"], conf["ca_cert"], conf["model_uuid"]
+        ) as client:
+            client.login(username, password)
+            full = client.full_status()
+
+        machine = self._machine_id()
+        if not machine:
+            # Fail closed: without a host identity we cannot guarantee the
+            # host-only boundary, and reporting a remote unit with this
+            # machine's evidence is worse than reporting nothing.
+            raise ControllerError("could not determine this unit's machine id")
+        other_jaime = self._other_jaime_units(full, machine)
+
+        watch = self._watch_applications()
+        # "*" means every co-located unit. The shared extractor already treats
+        # an empty watch list as "all applications"; k8s never passes empty,
+        # so reusing that here does not change the k8s charm.
+        watch_filter = [] if "*" in watch else watch
+
+        exclude = [self.app.name]
+        principal_app = self._get_principal_name()
+        if principal_app:
+            exclude.append(principal_app)
+
+        statuses = extract_unit_statuses(
+            full, watch_applications=watch_filter, exclude_applications=exclude
+        )
+        statuses = {
+            name: info for name, info in statuses.items()
+            if info.get("machine") == machine
+        }
+        return statuses, other_jaime
+
+    def _other_jaime_units(self, full_status: dict, machine: str | None) -> list[str]:
+        """Other Jaime units co-located on this machine, if any.
+
+        They can only be seen through the controller, so this is empty on the
+        credential-free default path. Two Jaime units on one host would open
+        duplicate incidents for the same fault; deduplicating needs the peer
+        relation and is deferred to Phase 6.1, so for now the case is detected
+        and reported.
+        """
+        if not machine:
+            return []
+        all_units = extract_unit_statuses(full_status)
+        return sorted(
+            name for name, info in all_units.items()
+            if name != self.unit.name
+            and name.split("/")[0] == self.app.name
+            and info.get("machine") == machine
+        )
+
+    def _report_other_jaime_units(self, other_jaime: list[str]) -> None:
+        if not other_jaime:
+            return
+        logger.warning("other Jaime units co-located on this machine: %s", other_jaime)
+        if isinstance(self.unit.status, ActiveStatus) and self.unit.status.message == "Ready":
+            self.unit.status = ActiveStatus(
+                f"Ready; {len(other_jaime)} other Jaime unit(s) on this machine "
+                f"({', '.join(other_jaime)}); duplicate reports possible "
+                "(deduplication deferred to Phase 6.1)"
+            )
 
     def _log_principal_status(self):
         """Read principal unit workload status via goal-state and drive incidents."""
         # Build the set of units actually related to this Jaime instance.
-        # goal-state can return units from other relations on the same machine
-        # (e.g. when two subordinates share a host), so we filter to our own
-        # principal units.
+        # This filter is load-bearing, not defensive: goal-state returns the
+        # same content under both the 'principal' and 'juju-info' endpoints,
+        # so without it a co-located sibling subordinate would be read as if
+        # it were this unit's principal.
         own_principal_units: set[str] = set()
         for rel in self.model.relations.get("principal", []):
             for unit in rel.units:

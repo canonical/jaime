@@ -190,22 +190,43 @@ def extract_unit_statuses(full_status: dict,
                           ) -> dict[str, dict]:
     """Extract per-unit workload statuses from a FullStatus response.
 
-    Returns {unit_name: {"status": str, "since": str, "message": str}}.
+    Returns {unit_name: {"status": str, "since": str, "message": str,
+    "machine": str}}.
+
+    Subordinate units are nested under their principal unit's ``subordinates``
+    map rather than appearing in their own application's ``units`` (which is
+    empty for a subordinate app), so they are walked recursively. Juju reports
+    a subordinate's own ``machine`` as an empty string, so it inherits its
+    principal's machine, which is what makes host filtering work.
+
+    The watch and exclude filters are applied per unit, by the application the
+    unit name belongs to. Filtering only at the application level would either
+    leak every subordinate of a watched principal or hide a watched
+    subordinate that happens to sit under an unwatched principal.
+
     If watch_applications is empty/None, all applications are included.
     """
     watch = {a for a in (watch_applications or []) if a}
     exclude = set(exclude_applications or [])
-    result = {}
-    for app_name, app_data in (full_status.get("applications") or {}).items():
-        if app_name in exclude:
-            continue
-        if watch and app_name not in watch:
-            continue
-        for unit_name, unit_data in (app_data.get("units") or {}).items():
+    result: dict[str, dict] = {}
+
+    def walk(unit_name: str, unit_data: dict, parent_machine: str) -> None:
+        app_name = unit_name.split("/")[0]
+        machine = unit_data.get("machine") or parent_machine
+        if app_name not in exclude and (not watch or app_name in watch):
             ws = unit_data.get("workload-status") or {}
             result[unit_name] = {
                 "status": ws.get("status", "unknown"),
                 "since": ws.get("since", ""),
                 "message": ws.get("info", ""),
+                "machine": machine,
             }
+        # Recurse even when this unit is filtered out: a watched subordinate
+        # can be nested under a principal we are not watching.
+        for sub_name, sub_data in (unit_data.get("subordinates") or {}).items():
+            walk(sub_name, sub_data, machine)
+
+    for _app_name, app_data in (full_status.get("applications") or {}).items():
+        for unit_name, unit_data in (app_data.get("units") or {}).items():
+            walk(unit_name, unit_data, "")
     return result

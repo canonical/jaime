@@ -148,6 +148,72 @@ _FULL_STATUS = {
 }
 
 
+# A machine-model FullStatus, shaped from a real Client.FullStatus response
+# captured against Juju 3.6 (homelab, manual cloud). Two things it records
+# that the Kubernetes fixture above cannot exercise:
+#
+#   - subordinate units are nested under the principal unit's `subordinates`
+#     map; their own application's `units` is empty
+#   - a nested subordinate's `machine` is the empty string, so it must inherit
+#     its principal's machine to be host-filterable
+#
+# Raw API shape: workload-status carries `status`/`info`/`since` (the CLI's
+# `current`/`message` is a different, display-only serialisation).
+_FULL_STATUS_MACHINE = {
+    "machines": {
+        "0": {"juju-status": {"current": "started"}, "dns-name": "10.0.0.1"},
+        "1": {"juju-status": {"current": "started"}, "dns-name": "10.0.0.2"},
+    },
+    "applications": {
+        "ubuntu": {
+            "subordinate-to": [],
+            "units": {
+                "ubuntu/0": {
+                    "machine": "0",
+                    "workload-status": {
+                        "status": "active",
+                        "info": "",
+                        "since": "2026-09-23T12:45:01Z",
+                    },
+                    "subordinates": {
+                        "jaime/0": {
+                            "machine": "",
+                            "workload-status": {
+                                "status": "active",
+                                "info": "Ready",
+                                "since": "2026-09-23T12:54:20Z",
+                            },
+                        },
+                        "logrotated/0": {
+                            "machine": "",
+                            "workload-status": {
+                                "status": "blocked",
+                                "info": "log rotation config missing",
+                                "since": "2026-09-23T18:17:01Z",
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        "postgresql": {
+            "units": {
+                "postgresql/0": {
+                    "machine": "1",
+                    "workload-status": {
+                        "status": "active",
+                        "info": "",
+                        "since": "2026-09-23T13:00:00Z",
+                    },
+                },
+            },
+        },
+        # A subordinate application reports no units of its own.
+        "jaime": {"subordinate-to": ["ubuntu"], "units": {}},
+    },
+}
+
+
 class TestExtractUnitStatuses:
     def test_extracts_all_units(self):
         result = extract_unit_statuses(_FULL_STATUS)
@@ -171,3 +237,58 @@ class TestExtractUnitStatuses:
     def test_missing_workload_status_defaults_unknown(self):
         result = extract_unit_statuses({"applications": {"app": {"units": {"app/0": {}}}}})
         assert result["app/0"]["status"] == "unknown"
+
+
+class TestExtractMachineUnitStatuses:
+    def test_walks_subordinate_units(self):
+        result = extract_unit_statuses(_FULL_STATUS_MACHINE)
+        assert set(result) == {"ubuntu/0", "jaime/0", "logrotated/0", "postgresql/0"}
+        assert result["logrotated/0"]["status"] == "blocked"
+        assert result["logrotated/0"]["message"] == "log rotation config missing"
+
+    def test_subordinate_inherits_principal_machine(self):
+        result = extract_unit_statuses(_FULL_STATUS_MACHINE)
+        assert result["logrotated/0"]["machine"] == "0"
+        assert result["jaime/0"]["machine"] == "0"
+
+    def test_principal_machine_recorded(self):
+        result = extract_unit_statuses(_FULL_STATUS_MACHINE)
+        assert result["ubuntu/0"]["machine"] == "0"
+        assert result["postgresql/0"]["machine"] == "1"
+
+    def test_subordinate_watched_under_unwatched_principal(self):
+        """A watched subordinate is reachable even when its principal is not."""
+        result = extract_unit_statuses(
+            _FULL_STATUS_MACHINE, watch_applications=["logrotated"]
+        )
+        assert list(result) == ["logrotated/0"]
+
+    def test_watch_does_not_leak_subordinates_of_watched_principal(self):
+        result = extract_unit_statuses(
+            _FULL_STATUS_MACHINE, watch_applications=["ubuntu"]
+        )
+        assert list(result) == ["ubuntu/0"]
+
+    def test_exclude_removes_nested_subordinate(self):
+        result = extract_unit_statuses(
+            _FULL_STATUS_MACHINE, exclude_applications=["logrotated"]
+        )
+        assert "logrotated/0" not in result
+        assert "jaime/0" in result
+
+    def test_excluded_principal_still_exposes_watched_subordinate(self):
+        """Excluding a principal must not hide its co-located subordinates.
+
+        The machine charm always reads the principal from goal-state, so it
+        excludes the principal application from the controller set; its
+        co-located subordinates must remain visible.
+        """
+        result = extract_unit_statuses(
+            _FULL_STATUS_MACHINE, exclude_applications=["ubuntu"]
+        )
+        assert "ubuntu/0" not in result
+        assert result["logrotated/0"]["machine"] == "0"
+
+    def test_machine_defaults_empty_when_absent(self):
+        result = extract_unit_statuses(_FULL_STATUS)
+        assert result["postgresql-k8s/0"]["machine"] == ""
