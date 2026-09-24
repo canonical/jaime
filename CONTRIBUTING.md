@@ -84,6 +84,14 @@ body when the reason is not obvious from the diff.
 
 Asking a clarifying question is always preferred over guessing.
 
+## Releasing
+
+Releases are cut from version tags and published to CharmHub. The versioning
+scheme, prerequisites (CharmHub registration, track guardrails, CI credentials),
+the release and promotion workflows, and the step-by-step checklist are in
+[`RELEASING.md`](RELEASING.md). That document is currently a proposed plan under
+review; the concrete tasks are in `TASKS.md` under 5.4.
+
 ## Safety rules
 
 Jaime runs next to production workloads and talks to third-party AI providers.

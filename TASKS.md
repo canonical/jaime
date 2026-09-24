@@ -447,10 +447,30 @@ file, which is why it rots unnoticed.
 
 ### 5.3. Release
 
-Gated on 4.2, 4.4 and 4.6.
+Gated on 4.2, 4.4 and 4.6 for **stable**. Edge releases may proceed earlier; see
+5.4 and `RELEASING.md`.
 
 - [ ] [project] Publish both charms to CharmHub with tracks and channels
 - [x] [docs] Per-charm CharmHub page content
+
+### 5.4. Release automation
+
+The process, prerequisites and workflow design are written up in
+`RELEASING.md` for review before anything is implemented. Both charms share one
+repository version; a `vX.Y.Z` tag derives the `X.Y` track and publishes to
+`X.Y/edge` and `latest/edge`.
+
+- [ ] [project] Record the release model in `ARCHITECTURE.md` (shared version, tag to track mapping, channel policy, guardrail prerequisite) before implementing
+- [ ] [project] Register `jaime-k8s` on CharmHub if it is not already registered
+- [ ] [project] Request the `MAJOR.MINOR` track guardrail for both charms at discourse.charmhub.io
+- [ ] [project] Create the `0.1` track for both charms once the guardrail is approved
+- [ ] [project] Create an attenuated `CHARMCRAFT_AUTH` store credential for both charms and add it as a repository secret behind a protected `charmhub` environment
+- [ ] [project] Add `.github/workflows/release.yml` on `v*` tags: validate the tag against `CHANGELOG.md` and both `charmcraft.yaml` versions, run the unit suites, pack both charms, upload with `--release ${TRACK}/edge --release latest/edge`, and create the GitHub Release from the matching CHANGELOG section
+- [ ] [project] Add the first-release fallback: when the versioned track does not exist yet, publish `latest/edge` only and leave the versioned pointer to a later step
+- [ ] [project] Add `.github/workflows/promote.yml` to move a revision along `X.Y/edge` to `X.Y/beta` to `X.Y/stable` on manual dispatch
+- [ ] [test] Dry-run the release workflow through `workflow_dispatch` before the first tag
+- [ ] [project] Cut `v0.1.0`: bump both charms to `0.1.0`, move `[Unreleased]` to `## [0.1.0]`, tag, publish, and verify with `charmcraft status` and `juju info`
+- [x] [docs] Add a `## Releasing` section to `CONTRIBUTING.md` linking `RELEASING.md`
 
 ## 6. Phase 6 — Clustered operation for machine charms
 
