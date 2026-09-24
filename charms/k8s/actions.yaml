@@ -1,6 +1,10 @@
 show-status:
-  description: "Show the current monitoring state for all watched application units."
+  description: "Show the current monitoring state for every watched application unit: workload, active incident if any, and last observation. Returns a JSON array under 'result'."
   params: {}
+  results:
+    result:
+      type: string
+      description: "JSON array of per-unit records: unit, workload, first-seen, status-since, increment, last-reported, incident-id, incident-opened-at."
 show-usage:
   description: "Show AI token usage and cost. Returns a global summary across all incidents, or per-incident detail if incident-id is provided."
   params:

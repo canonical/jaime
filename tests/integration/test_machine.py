@@ -17,10 +17,12 @@ from .conftest import (
     PRINCIPAL_APP,
     PRINCIPAL_BASE,
     PRINCIPAL_CHANNEL,
+    PRINCIPAL_UNIT,
     jaime_message,
     jaime_unit,
     principal_status,
     set_principal_status,
+    show_status,
 )
 
 pytestmark = pytest.mark.integration
@@ -104,14 +106,11 @@ class TestIncidentLifecycle:
             timeout=15 * 60,
         )
 
-        task = deployed.run(unit, "show-status")
-        assert task.success
-        assert task.results.get("incident-id")
+        assert show_status(deployed, unit, PRINCIPAL_UNIT)["incident-id"]
 
     def test_report_file_exists_and_references_incident(self, deployed):
         unit = jaime_unit(deployed)
-        task = deployed.run(unit, "show-status")
-        incident_id = task.results["incident-id"]
+        incident_id = show_status(deployed, unit, PRINCIPAL_UNIT)["incident-id"]
 
         listing = deployed.ssh(unit, "ls /var/log/jaime/reports/")
         assert incident_id in listing

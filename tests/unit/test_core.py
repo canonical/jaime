@@ -1,5 +1,6 @@
 """Unit tests for jaime.core (shared charm logic)."""
 
+import json
 import unittest.mock as mock
 
 from ops.charm import CharmBase
@@ -129,6 +130,44 @@ class TestConfigChanged:
         h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, ActiveStatus)
         assert h.charm.unit.status.message == "Ready"
+
+
+class TestShowStatus:
+    def _run(self, h):
+        event = mock.MagicMock()
+        h.charm._on_action_show_status(event)
+        return json.loads(event.set_results.call_args[0][0]["result"])
+
+    def test_empty_state_returns_empty_list(self):
+        h = _make_harness()
+        assert self._run(h) == []
+
+    def test_returns_every_tracked_unit(self):
+        h = _make_harness()
+        inc = Incident.open()
+        h.charm._status_tracker._state["postgresql/0"] = {
+            "status": "blocked",
+            "since": "2026-01-01T00:00:00+00:00",
+            "unhealthy_since": "2026-01-01T00:00:00+00:00",
+            "increment": 3,
+            "incident": inc.to_dict(),
+            "last_reported": "2026-01-01T00:01:00+00:00",
+        }
+        h.charm._status_tracker._state["mysql/0"] = {
+            "status": "active",
+            "since": "2026-01-01T00:02:00+00:00",
+            "increment": 1,
+        }
+
+        records = self._run(h)
+        assert [r["unit"] for r in records] == ["postgresql/0", "mysql/0"]
+        by_unit = {r["unit"]: r for r in records}
+        assert by_unit["postgresql/0"]["workload"] == "blocked"
+        assert by_unit["postgresql/0"]["incident-id"] == inc.id
+        assert by_unit["postgresql/0"]["first-seen"] == "2026-01-01T00:00:00+00:00"
+        assert by_unit["postgresql/0"]["increment"] == 3
+        assert by_unit["mysql/0"]["incident-id"] == ""
+        assert by_unit["mysql/0"]["increment"] == 1
 
 
 class TestEnums:

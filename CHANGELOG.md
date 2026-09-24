@@ -30,6 +30,7 @@
 
 ### Bug fixes
 
+- Fix `show-status` to report every monitored unit. The action built a single flat results dict and overwrote it once per unit, so a charm monitoring more than one unit — the machine charm with `watch-applications`, or the k8s charm watching several applications — returned only an arbitrary single unit. It now returns a JSON array of per-unit records under `result`, identical on both charms, with the list under `result` unchanged in field names and `increment` as a JSON number instead of a string
 - Fix the `charms/k8s/README.md` observer block: `juju grant-secret` grants to an application, not a model, so target `jaime-k8s` instead of `${MODEL_NAME}`, and document granting the AI token secret the same way
 - Fix a misplaced import block in `charms/machine/src/jaime/collector.py`, where `jaime.logutils` was imported halfway down the file
 - Rename ambiguous `l` loop identifiers to `line` across the collectors and report generator

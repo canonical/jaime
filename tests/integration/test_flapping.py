@@ -22,10 +22,12 @@ from .conftest import (
     PRINCIPAL_APP,
     PRINCIPAL_BASE,
     PRINCIPAL_CHANNEL,
+    PRINCIPAL_UNIT,
     jaime_message,
     jaime_unit,
     principal_status,
     set_principal_status,
+    show_status,
 )
 
 pytestmark = pytest.mark.integration
@@ -80,18 +82,15 @@ class TestFlappingWorkload:
             timeout=15 * 60,
         )
 
-        task = juju.run(unit, "show-status")
-        assert task.success
-        assert task.results.get("incident-id")
+        assert show_status(juju, unit, PRINCIPAL_UNIT)["incident-id"]
 
     def test_first_seen_precedes_status_since(self, flapping_model):
         """show-status must expose both anchors, with first-seen the older."""
         juju = flapping_model
-        task = juju.run(jaime_unit(juju), "show-status")
-        assert task.success
+        record = show_status(juju, jaime_unit(juju), PRINCIPAL_UNIT)
 
-        first_seen = task.results.get("first-seen", "")
-        status_since = task.results.get("status-since", "")
+        first_seen = record.get("first-seen", "")
+        status_since = record.get("status-since", "")
         assert first_seen and status_since
         # first-seen is when Jaime first saw the unit unhealthy; status-since
         # is Juju's last status bump, which the flapping above kept refreshing.
@@ -108,7 +107,7 @@ class TestFlappingWorkload:
         juju = flapping_model
         unit = jaime_unit(juju)
 
-        before = juju.run(unit, "show-status").results.get("incident-id")
+        before = show_status(juju, unit, PRINCIPAL_UNIT).get("incident-id")
         assert before, "expected an incident to already be open"
 
         set_principal_status(juju, "maintenance", "restarting")
@@ -122,5 +121,5 @@ class TestFlappingWorkload:
             timeout=10 * 60,
         )
 
-        after = juju.run(unit, "show-status").results.get("incident-id")
+        after = show_status(juju, unit, PRINCIPAL_UNIT).get("incident-id")
         assert after == before, "flapping between watched statuses opened a new incident"

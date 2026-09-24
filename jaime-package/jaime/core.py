@@ -471,23 +471,28 @@ class CoreMixin:
     # ------------------------------------------------------------------
 
     def _on_action_show_status(self, event):
-        state = self._status_tracker._state
-        if not state:
-            event.set_results({"result": "no status observed yet"})
-            return
-        results = {}
-        for unit_name, entry in state.items():
-            results.update({
+        """Return the current monitoring state for every tracked unit.
+
+        Juju action results are a flat map of scalars, so the per-unit records
+        are returned as a JSON array under ``result`` rather than as separate
+        keys. A single dict keyed by fixed field names would let each unit
+        overwrite the previous one, which is how this action previously
+        reported only an arbitrary single unit.
+        """
+        records = [
+            {
                 "unit": unit_name,
                 "workload": entry.get("status", "unknown"),
                 "first-seen": entry.get("unhealthy_since") or entry.get("since", ""),
                 "status-since": entry.get("since", ""),
-                "increment": str(entry.get("increment", 0)),
+                "increment": entry.get("increment", 0),
                 "last-reported": entry.get("last_reported") or "",
                 "incident-id": (entry.get("incident") or {}).get("id", ""),
                 "incident-opened-at": (entry.get("incident") or {}).get("opened_at", ""),
-            })
-        event.set_results(results)
+            }
+            for unit_name, entry in self._status_tracker._state.items()
+        ]
+        event.set_results({"result": json.dumps(records, indent=2)})
 
     def _on_action_show_usage(self, event):
         incident_id = event.params.get("incident-id", "").strip()

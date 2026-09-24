@@ -13,6 +13,7 @@ selected: a machine cloud (LXD) for the machine charm, a Kubernetes cloud
 (MicroK8s) for the k8s charm.
 """
 
+import json
 import os
 import pathlib
 
@@ -97,6 +98,25 @@ def set_principal_status(juju, status: str, message: str) -> None:
     field, which is exactly what the flapping tests need to exercise.
     """
     juju.exec("status-set", status, message, unit=PRINCIPAL_UNIT)
+
+
+def show_status_records(juju, jaime_app_unit: str) -> list[dict]:
+    """Run show-status on the Jaime unit and return the parsed per-unit records.
+
+    The action returns a JSON array under ``result`` because Juju action
+    results are a flat map of scalars and a charm may monitor several units.
+    """
+    task = juju.run(jaime_app_unit, "show-status")
+    assert task.success, "show-status action failed"
+    return json.loads(task.results["result"])
+
+
+def show_status(juju, jaime_app_unit: str, unit: str) -> dict:
+    """Return the show-status record for one monitored unit ({} if absent)."""
+    for record in show_status_records(juju, jaime_app_unit):
+        if record.get("unit") == unit:
+            return record
+    return {}
 
 
 def _charm_path(glob: str) -> pathlib.Path:
