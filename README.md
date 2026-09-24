@@ -141,6 +141,8 @@ or the configured model changes, so you can iterate by editing the text.
 | `log-window-minutes` | `30` | How far back to collect logs |
 | `max-context-lines` | `500` | Max lines per collected file/section |
 | `watch-applications` | `""` | Comma-separated apps to monitor; `*` means all reachable (empty = none on k8s, principal only on machine) |
+| `juju-api-user` | `""` | Juju user with read access on the model, used to read co-located units (machine) or other applications (k8s) |
+| `juju-api-password` | `""` | Password or Juju secret URI for `juju-api-user` |
 | `diagnostics` | `""` | JSON monitoring plan, machine charm only (empty = AI-generated on relation) |
 
 See `charms/machine/config.yaml` and `charms/k8s/config.yaml` for the full reference.
@@ -161,6 +163,49 @@ of them, Juju places a Jaime unit alongside each. With `watch-applications` set,
 those units would monitor the same host and report the same fault twice. Jaime
 flags this in its unit status; relate it to one principal per machine to avoid
 it.
+
+### Monitoring co-located units (machine charm)
+
+The machine charm always monitors its related principal, and can additionally
+monitor other units on the **same host**. This is how you monitor subordinate
+charms: each is co-located with its principal, and is nested under it in Juju's
+status rather than appearing as a unit of its own application.
+
+Co-located units are read through the Juju controller API, which needs a
+read-only user (a unit's own agent identity lacks the `ModelRead` permission
+`Client.FullStatus` requires). This is the same observer setup as the k8s
+charm:
+
+```bash
+MODEL_NAME=<your-model>
+
+juju add-user jaime-observer
+juju grant jaime-observer read ${MODEL_NAME}
+
+NEW_PASS=$(openssl rand -hex 16)
+echo "$NEW_PASS" | juju change-user-password jaime-observer --no-prompt
+
+SECRET_URI=$(juju add-secret jaime-juju-api password="$NEW_PASS")
+juju grant-secret jaime-juju-api jaime
+juju config jaime juju-api-user=jaime-observer juju-api-password="${SECRET_URI}"
+
+# Watch every unit co-located with the principal, or name specific apps
+juju config jaime watch-applications="*"
+# juju config jaime watch-applications=logrotated,my-subordinate
+```
+
+| Value | Watches | Credentials |
+|---|---|---|
+| `""` (default) | the principal only | not needed |
+| `app1,app2` | the principal, plus co-located units of those applications | required |
+| `*` | the principal, plus every co-located unit | required |
+
+The principal is always watched, whether or not it is named. A configured
+application with no unit on this machine is skipped silently, so run
+`show-status` to see which units are actually observed — it lists every
+tracked unit as JSON. Credentials are required only when `watch-applications`
+is non-empty; missing or rejected credentials put the charm in a blocked
+state. Reach remains bounded to this host, as described above.
 
 ## Diagnostics plan
 
@@ -262,8 +307,10 @@ the same Juju model. Workload statuses come from the **Juju controller API**;
 pod logs/events/metrics come from the **Kubernetes API** via the pod's
 in-cluster service account (no `kubectl` binary).
 
-The machine charm discovers its principal through a relation; the k8s charm
-has no relation, so it needs read access to the model's controller API.
+The machine charm discovers its principal through a relation, and uses the
+controller API only when `watch-applications` asks it to see co-located units.
+The k8s charm has no relation, so it always needs read access to the model's
+controller API.
 
 ### Deploy
 

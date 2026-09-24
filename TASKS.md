@@ -342,23 +342,23 @@ applications. `*` adds every co-located unit. The principal is always watched.
 
 - [x] [project] Record the decision and tradeoff in `ARCHITECTURE.md`
 - [x] [docs] Update the `AGENTS.md` rule and the `ARCHITECTURE.md` statements it reverses
-- [ ] [charm] Add `watch-applications` to the machine charm, with the same name and opt-in rule as the k8s charm
-- [ ] [charm] Support `*` as the explicit "every co-located unit" value
-- [ ] [charm] Add `juju-api-user` and `juju-api-password`, required only when `watch-applications` is non-empty
-- [ ] [charm] Read unit status from the Juju controller API
-- [ ] [python] Walk each unit's `subordinates` in `extract_unit_statuses`. Subordinate units are nested under their principal unit, so today the function returns none of them. They are the main thing 4.3 exists to watch
-- [ ] [python] Return each unit's `machine` field from `extract_unit_statuses`, so units can be filtered to this host
-- [ ] [charm] Read Jaime's own machine from `JUJU_MACHINE_ID` via `ops` `JujuContext.machine_id`, not by parsing `agent.conf`
-- [ ] [charm] Resolve co-located units from `Client.FullStatus` filtered by machine. No filesystem enumeration is needed, since the status call already carries the machine field
-- [ ] [charm] Exclude Jaime's own unit, using the existing `exclude_applications` argument
-- [ ] [charm] Strengthen the comment on the `own_principal_units` filter in `_log_principal_status`. `goal-state` returns identical content under both endpoints, so the filter is what stops a co-located subordinate being processed as a principal unit
-- [ ] [charm] Always watch the principal, whatever `watch-applications` is set to
-- [ ] [charm] Detect other Jaime units on the same machine and report it in the unit status. Two Jaime units on one host would open duplicate incidents. Deduplication needs the peer relation and is deferred to 6.1
-- [ ] [charm] Block when credentials are missing or rejected, mirroring the k8s prerequisite check from 4.2
-- [ ] [test] Add a machine-model `FullStatus` fixture with machines and nested subordinates. The existing `_FULL_STATUS` is Kubernetes-shaped and exercises neither
-- [ ] [test] Cover the credential-free default, name filtering, `*`, self-exclusion and host filtering
-- [ ] [docs] Update `docs/config.md` once the options land: it documents none of `watch-applications`, `juju-api-user`, `juju-api-password` or `diagnostics`, so leaving it would make it contradict the charm rather than merely lag it
-- [ ] [docs] Document the host-only limit in `README.md`, so the boundary is not mistaken for a bug
+- [x] [charm] Add `watch-applications` to the machine charm, with the same name and opt-in rule as the k8s charm
+- [x] [charm] Support `*` as the explicit "every co-located unit" value
+- [x] [charm] Add `juju-api-user` and `juju-api-password`, required only when `watch-applications` is non-empty
+- [x] [charm] Read unit status from the Juju controller API
+- [x] [python] Walk each unit's `subordinates` in `extract_unit_statuses`. Subordinate units are nested under their principal unit, so today the function returns none of them. They are the main thing 4.3 exists to watch
+- [x] [python] Return each unit's `machine` field from `extract_unit_statuses`, so units can be filtered to this host
+- [x] [charm] Read Jaime's own machine from `JUJU_MACHINE_ID` via `ops` `JujuContext.machine_id`, not by parsing `agent.conf`
+- [x] [charm] Resolve co-located units from `Client.FullStatus` filtered by machine. No filesystem enumeration is needed, since the status call already carries the machine field
+- [x] [charm] Exclude Jaime's own unit, using the existing `exclude_applications` argument
+- [x] [charm] Strengthen the comment on the `own_principal_units` filter in `_log_principal_status`. `goal-state` returns identical content under both endpoints, so the filter is what stops a co-located subordinate being processed as a principal unit
+- [x] [charm] Always watch the principal, whatever `watch-applications` is set to
+- [x] [charm] Detect other Jaime units on the same machine and report it in the unit status. Two Jaime units on one host would open duplicate incidents. Deduplication needs the peer relation and is deferred to 6.1
+- [x] [charm] Block when credentials are missing or rejected, mirroring the k8s prerequisite check from 4.2
+- [x] [test] Add a machine-model `FullStatus` fixture with machines and nested subordinates. The existing `_FULL_STATUS` is Kubernetes-shaped and exercises neither
+- [x] [test] Cover the credential-free default, name filtering, `*`, self-exclusion and host filtering
+- [x] [docs] Update `docs/config.md` once the options land: it documents none of `watch-applications`, `juju-api-user`, `juju-api-password` or `diagnostics`, so leaving it would make it contradict the charm rather than merely lag it
+- [x] [docs] Document the host-only limit in `README.md`, so the boundary is not mistaken for a bug
 
 ### 4.4. Config consistency
 
@@ -424,6 +424,31 @@ file, which is why it rots unnoticed.
 - [ ] [docs] Rewrite `docs/actions.md`. It documents one of the eight shipped actions, and is wrong about what `diagnose` returns
 - [ ] [docs] Link `docs/` from `README.md` and `CONTRIBUTING.md`, so the reference pages are reachable and drift is noticed
 - [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`, which appears under both Changes and Features
+
+### 4.9. Incident history
+
+`show-status` reports current state only, and `status-state.json` keeps just the
+last incident per unit until a new watched episode clears it, so an operator
+cannot query past incidents. Reports and `events.jsonl` survive hook and unit
+restarts on the machine substrate, but are pod-local on Kubernetes and lost on
+pod replacement (see the Phase 6 durability idea), so this is machine-durable
+and k8s-best-effort until that lands.
+
+Prerequisite: `incident-closed` is written to the debug log only, not to
+`events.jsonl`, so closure and durations are not durably recorded.
+`list-incidents` needs that first. `list-incidents` is already listed under
+Future actions in `ARCHITECTURE.md`.
+
+- [ ] [project] Record the decision in `ARCHITECTURE.md`: write `incident-closed` to `events.jsonl` on recovery and on `reset`, and promote `list-incidents` from Future actions into both charms' action lists. Update the descriptive Audit-events list when the code lands
+- [ ] [charm] Write `incident-closed` to `events.jsonl` in `_process_unit` recovery and in `_on_action_reset`, alongside the existing debug events
+- [ ] [charm] Add a `list-incidents` action reading `events.jsonl`, correlating `incident-start` / `report-generated` / `incident-closed` by incident id, with an optional `unit` filter and JSON output; tolerate a missing or malformed log
+- [ ] [charm] Register `list-incidents` in both charms and both `actions.yaml`
+- [ ] [test] Cover open and closed incidents, report-path correlation, the `unit` filter, and an empty or malformed audit log
+- [ ] [docs] Update `docs/actions.md` (coordinate with 4.8) and the `ARCHITECTURE.md` descriptive sections once the code lands
+
+Known limitation: incidents logged before this change have no `incident-closed`
+row and will be reported as open. Only the most recent incident per unit is
+recoverable from `status-state.json`.
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 

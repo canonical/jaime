@@ -63,3 +63,33 @@ options:
       Jaime attempts to generate this plan via AI on relation-joined. See
       the diagnostic schema in src/jaime/diagnostics.py for the expected format.
     default: ""
+  watch-applications:
+    type: string
+    description: >
+      Comma-separated application names whose units on this machine should be
+      watched in addition to the principal. The principal is always watched.
+      Empty (the default) watches only the principal and opens no controller
+      connection, so no credentials are needed. Use "*" to watch every
+      co-located unit. Reach is bounded to units on this machine, because the
+      collectors read the local host; units on other machines are never
+      reported on. A configured name with no unit on this machine is skipped
+      silently.
+    default: ""
+  juju-api-user:
+    type: string
+    description: >
+      Name of a Juju user with 'read' permission on this model, used to fetch
+      workload statuses for co-located units from the controller API. A unit's
+      own agent identity does not have this permission. Only required when
+      watch-applications is non-empty. Create with:
+        juju add-user jaime-observer
+        juju grant jaime-observer read <model-name>
+    default: ""
+  juju-api-password:
+    type: string
+    description: >
+      Password for the juju-api-user. Accepts either a Juju secret URI
+      (``secret:<id>``, recommended) or a plain string (development only).
+      When a secret URI is provided, Jaime reads the ``password`` field from
+      the secret content.
+    default: ""

@@ -12,7 +12,7 @@ import subprocess
 import jubilant
 import pytest
 
-from .conftest import FAILURE_TIMEOUT_MINUTES, K8S_APP_NAME
+from .conftest import FAILURE_TIMEOUT_MINUTES, K8S_APP_NAME, show_status_records
 
 pytestmark = pytest.mark.integration
 
@@ -103,12 +103,10 @@ class TestK8sDeployment:
 
     def test_reads_watched_app_status_from_controller(self, deployed_k8s):
         """Statuses come from the controller API, not from any relation."""
-        task = deployed_k8s.run(_jaime_unit(), "show-status")
-        assert task.success
+        records = show_status_records(deployed_k8s, _jaime_unit())
         # Either a unit of the watched app is reported, or nothing has been
         # observed yet; a controller auth failure would have blocked instead.
-        observed = task.results.get("unit", "") or task.results.get("result", "")
-        assert WATCHED_APP in observed or "no status observed" in observed
+        assert records == [] or any(WATCHED_APP in r["unit"] for r in records)
 
 
 class TestRejectedControllerCredentials:

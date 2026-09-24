@@ -19,6 +19,10 @@ Jaime is currently designed as an **observe-first machine subordinate charm**. T
 | `max-context-lines` | int | `500` | Maximum number of log/context lines to include in a report context bundle. |
 | `report-dir` | string | `/var/log/jaime/reports` | Directory where Markdown or JSON report artifacts are written. |
 | `audit-log-path` | string | `/var/log/jaime/events.jsonl` | Path to the structured JSONL audit log. |
+| `diagnostics` | string | empty | Machine only. JSON monitoring plan; empty means generate one via AI on relation-joined. |
+| `watch-applications` | string | empty | Applications whose co-located units to watch, in addition to the always-watched principal. `*` means every co-located unit. |
+| `juju-api-user` | string | empty | Juju user with `read` on the model, used for the controller API. Required only when `watch-applications` is non-empty. |
+| `juju-api-password` | secret | empty | Password for `juju-api-user`; a Juju secret URI (`secret:<id>`) or a plain string (development only). Never logged. |
 
 ## `mode`
 
@@ -235,6 +239,71 @@ Example event:
 {"timestamp":"2026-06-21T15:30:00Z","event":"incident_started","principal_unit":"postgresql/0","status":"error","message":"principal unit entered watched status"}
 ```
 
+## `watch-applications`
+
+Comma-separated application names whose units on **this machine** should be
+watched, in addition to the principal.
+
+The machine charm always watches its related principal, whatever this option
+says: relating the subordinate is the opt-in. An empty value therefore watches
+the principal only, opens no controller connection and needs no credentials.
+
+| Value | Watches |
+|---|---|
+| empty (default) | the principal only |
+| `app1,app2` | the principal, plus any co-located units of those applications |
+| `*` | the principal, plus every co-located unit |
+
+Reach is bounded to units on the same machine, because the collectors read the
+local host. A report about a unit elsewhere would carry this machine's disk,
+memory, processes and firewall rules as evidence, so units on other machines
+are never reported on.
+
+A configured application with no unit on this machine is skipped silently. The
+unit status names what is monitored, so absence from that list is the signal.
+
+## `juju-api-user`
+
+Name of a Juju user with `read` permission on this model. The controller API
+checks workload status, but a unit's own agent identity does not have the
+`ModelRead` permission that `Client.FullStatus` requires, so a dedicated user
+is needed.
+
+Required only when `watch-applications` is non-empty.
+
+```bash
+juju add-user jaime-observer
+juju grant jaime-observer read <model-name>
+```
+
+When the value is empty and `watch-applications` is set, the charm reports a
+blocked status. Credentials rejected by the controller are also blocked, while
+a temporarily unreachable controller is reported as maintenance.
+
+## `juju-api-password`
+
+Password for `juju-api-user`. As with `api-token`, the recommended form is a
+Juju secret.
+
+```bash
+SECRET_URI=$(juju add-secret jaime-juju-api password=<PASSWORD>)
+juju grant-secret jaime-juju-api jaime
+juju config jaime juju-api-password="${SECRET_URI}"
+```
+
+Jaime reads the `password` field from the secret content. A plain string is
+accepted for local development but will be visible in `juju config` output. The
+password is never written to logs, audit events, reports or AI prompts.
+
+## `diagnostics`
+
+Machine only. A JSON monitoring plan describing what to collect (log files,
+processes, environment variables, network ports, systemd units, health
+commands). When empty, Jaime attempts to generate a plan via AI on
+relation-joined, and falls back to an empty plan if no provider is configured.
+
+The schema lives in the charm's `diagnostics.py`.
+
 ## Phase-1 recommended config
 
 ```yaml
@@ -247,4 +316,8 @@ log-window-minutes: 30
 max-context-lines: 500
 report-dir: /var/log/jaime/reports
 audit-log-path: /var/log/jaime/events.jsonl
+diagnostics: ""
+watch-applications: ""
+juju-api-user: ""
+juju-api-password: ""
 ```
