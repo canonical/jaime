@@ -48,7 +48,9 @@ options:
       API token for the configured AI provider. Accepts either a Juju secret URI
       (``secret:<id>``, recommended) or a plain token string (for development only).
       When a secret URI is provided, Jaime reads the ``token`` field from the secret
-      content. The token is never logged.
+      content. The token is never logged. To use a secret: run
+      ``juju add-secret jaime-token token=<value>``, grant it to the application,
+      then set this field to the returned secret URI.
     default: ""
   watch-statuses:
     type: string
@@ -64,7 +66,7 @@ options:
     default: 30
   log-window-minutes:
     type: int
-    description: "How far back Jaime should collect recent pod logs (minutes)."
+    description: "How far back Jaime should collect recent logs (minutes)."
     default: 30
   max-context-lines:
     type: int

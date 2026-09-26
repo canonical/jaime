@@ -29,7 +29,7 @@ options:
     default: ""
   watch-statuses:
     type: string
-    description: "Comma-separated principal unit statuses that should open an incident."
+    description: "Comma-separated unit workload statuses that should open an incident."
     default: "error,blocked"
   failure-timeout-minutes:
     type: int
@@ -49,7 +49,7 @@ options:
     default: 500
   report-dir:
     type: string
-    description: "Directory where Markdown or JSON report artifacts are written."
+    description: "Directory where Markdown report artifacts are written."
     default: /var/log/jaime/reports
   audit-log-path:
     type: string

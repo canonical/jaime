@@ -4,6 +4,7 @@
 
 ### Changes
 
+- Align the shared config descriptions between the two charms (`api-token`, `watch-statuses`, `log-window-minutes`, `report-dir`) and add a test asserting that the intersection of the two option sets agrees on keys, types, defaults and descriptions. A key moving into the shared set is covered automatically; the two options whose reach is genuinely substrate-specific (`juju-api-user`, `watch-applications`) are allowlisted with a stated reason
 - Change the default OpenRouter model from `deepseek/deepseek-chat` to `~deepseek/deepseek-v4-flash-latest`. The legacy model's shared free pool is routinely rate-limited upstream (HTTP 429), and v4-flash is effectively free with substantially more capacity; the `~` prefix tracks OpenRouter's latest v4-flash release
 - Replace em-dashes with colons in user-facing output: unit status messages (e.g. `Ready: no apps in watch-applications`), action results, and action failure messages (`no suggestion available: mode is 'observe'`). Em-dashes remain only in docstrings, comments, debug-log lines, and report prose
 - Adopt the `tests/unit` and `tests/integration` layout documented in `AGENTS.md`. Shared-library tests move out of `charms/machine/tests/` and `charms/k8s/tests/` into `tests/unit/`, leaving only genuinely charm-specific tests in the charm suites. `tests/unit` sees only `jaime-package` on its `pythonpath`, which proves the shared library does not depend on any charm-local module
