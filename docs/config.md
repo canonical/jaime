@@ -16,7 +16,7 @@ Jaime is currently designed as an **observe-first machine subordinate charm**. T
 | `failure-timeout-minutes` | int | `5` | How long a watched status must persist before a report is generated. |
 | `cooldown-minutes` | int | `30` | Minimum time before generating another report for the same unresolved incident. |
 | `log-window-minutes` | int | `30` | How far back Jaime should collect recent logs. |
-| `max-context-lines` | int | `500` | Maximum number of log/context lines to include in a report context bundle. |
+| `max-context-lines` | int | `500` | Per-item cap on collected lines. Some sections apply a tighter cap (for example socket statistics and firewall rules). This is not a report or prompt total. |
 | `report-dir` | string | `/var/log/jaime/reports` | Directory where Markdown or JSON report artifacts are written. |
 | `audit-log-path` | string | `/var/log/jaime/events.jsonl` | Path to the structured JSONL audit log. |
 | `diagnostics` | string | empty | Machine only. JSON monitoring plan; empty means generate one via AI on relation-joined. |

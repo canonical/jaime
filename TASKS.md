@@ -392,35 +392,41 @@ the high-volume or secret-bearing sources:
 - environment variables: names and set/unset only, never values
 - secret-bearing config values: redacted before the report is written (4.12)
 
-- [ ] [python] Machine: collect snap status (`snap list`, `snap services`) and
+- [x] [python] Machine: collect snap status (`snap list`, `snap services`) and
       identify failed snaps from non-active services plus failed `snap changes`
       (count-bounded). Omit the sections when nothing failed, and on hosts with
       no snaps
-- [ ] [python] Machine: collect `snap logs` only for failed snaps, from the
+- [x] [python] Machine: collect `snap logs` only for failed snaps, from the
       failed service (`<snap>.<app>`), fetching wide with `-n <fetch_cap>` and
       keeping the last error/warning match with ±10 lines, falling back to the
       tail when nothing matches. Cap the snaps inspected at 3 and the lines per
       snap at `min(max-context-lines, 100)`
-- [ ] [python] Machine: enrich systemd service detail for plan and failed units
+- [x] [python] Machine: enrich systemd service detail for plan and failed units
       with `systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus`
-- [ ] [python] Machine: report environment variables as set/unset only; never
+- [x] [python] Machine: report environment variables as set/unset only; never
       store, log or emit their values
-- [ ] [python] k8s: capture the current `state.waiting.reason` (CrashLoopBackOff)
+- [x] [python] k8s: capture the current `state.waiting.reason` (CrashLoopBackOff)
       and `lastState.terminated` reason/exit code (OOMKilled), init-container
       state, and previous-container logs when `restartCount > 0` (new `previous`
       flag on `get_pod_logs`)
-- [ ] [python] Enforce the safety caps from the `ARCHITECTURE.md` table on every
+- [x] [python] Enforce the safety caps from the `ARCHITECTURE.md` table on every
       collected item, including the per-line byte cap, fixing firewall rules,
       `systemd --failed`, broad ports, socket statistics, charm config,
       health-command output, plan item counts and pod log totals. Along the way,
       collect `ss` once (removing the duplicate between `collect_ss_connections`
       and `_collect_broad_ports`) and without `sudo` (hooks run as root)
-- [ ] [python] Fix the executive summary's "Explicitly enabled config options":
+- [x] [python] Fix the executive summary's "Explicitly enabled config options":
       it lists truthy schema defaults, not operator-set values. Relabel or remove
       it
-- [ ] [test] Every collector respects its bound, including a deliberately huge
+- [x] [test] Every collector respects its bound, including a deliberately huge
       single line and a large item count; regression tests for the previously
       unbounded sections and for the snap error-window selection
+- [x] [docs] Document the report structure in `ARCHITECTURE.md` and regenerate
+      `examples/report.md` (including a failed snap) from the real generator
+- [x] [project] Add `make examples`, which regenerates
+      `examples/diagnostics.json` and `examples/report.md` from the real code
+- [x] [test] Assert the committed examples match the generator byte-for-byte and
+      that the example exercises key sections, so the report schema cannot drift
 
 Part of this change, not separate tasks: update the two context-collection lists
 in `ARCHITECTURE.md`, and correct the `max-context-lines` description to say it

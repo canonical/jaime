@@ -139,11 +139,18 @@ class K8sApiClient:
         container: str | None = None,
         since_time: datetime.datetime | None = None,
         tail_lines: int = 500,
+        previous: bool = False,
     ) -> list[str]:
-        """Return pod log lines, bounded by time and line count."""
+        """Return pod log lines, bounded by time and line count.
+
+        ``previous=True`` reads the logs of a container's previous instance,
+        which is what explains a crash loop.
+        """
         params = {"tailLines": tail_lines}
         if container:
             params["container"] = container
+        if previous:
+            params["previous"] = "true"
         if since_time:
             params["sinceTime"] = since_time.strftime("%Y-%m-%dT%H:%M:%SZ")
         path = f"/api/v1/namespaces/{self.namespace}/pods/{pod_name}/log"

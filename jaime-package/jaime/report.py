@@ -16,6 +16,7 @@ from jaime.logutils import deduplicate_lines
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REPORT_DIR = "/var/log/jaime/reports"
+_MAX_CHARM_OPTIONS = 100
 
 
 def _append(lines: list[str], *chunks: list[str]) -> None:
@@ -63,7 +64,9 @@ def generate_report(
     _append_section_health_commands(lines, plan_results)
 
     # Background sections
+    _append_section_snap(lines, context)
     _append_section_k8s_pod(lines, context)
+    _append_section_k8s_previous_logs(lines, context)
     _append_section_k8s_events(lines, context)
     _append_section_k8s_resource_usage(lines, context)
     _append_section_juju_config(lines, context)
@@ -141,7 +144,7 @@ def _append_section_summary(lines: list[str], workload: str,
             }
             if set_options:
                 summary.append("")
-                summary.append("**Explicitly enabled config options:**")
+                summary.append("**Charm options with non-empty schema defaults:**")
                 for k, v in sorted(set_options.items()):
                     summary.append(f"- `{k}`: `{v}`")
         except Exception:
@@ -195,22 +198,43 @@ def _append_section_processes(lines: list[str], plan_results: dict) -> None:
             _append(lines, ["## Processes", "```", *raw_lines, "```"])
 
 
+def _systemd_line(item: dict) -> str:
+    """One compact line for a systemd unit: state plus restart/exit detail.
+
+    `NRestarts` and `ExecMainStatus` are what diagnose a service that is
+    looping or exiting non-zero, so they are worth the few extra characters.
+    """
+    unit = item.get("unit", "")
+    status = item.get("status", "")
+    icon = "✓" if status == "active" else "✗"
+    detail = []
+    if item.get("substate"):
+        detail.append(str(item["substate"]))
+    if item.get("restarts") not in (None, "", "0"):
+        detail.append(f"restarts={item['restarts']}")
+    if item.get("exec_main_status") not in (None, "", "0"):
+        detail.append(f"exec={item['exec_main_status']}")
+    suffix = f" ({', '.join(detail)})" if detail else ""
+    return f"- `{unit}` → {status}{suffix} {icon}"
+
+
 def _append_section_systemd(lines: list[str], plan_results: dict, context: dict) -> None:
     section = plan_results.get("systemd_units")
 
     if section and section["type"] == "plan":
         _append(lines, ["## Systemd units"])
         for item in section.get("items", []):
-            unit = item.get("unit", "")
-            status = item.get("status", "")
-            icon = "✓" if status == "active" else "✗"
-            _append(lines, [f"- `{unit}` → {status} {icon}"])
+            _append(lines, [_systemd_line(item)])
     else:
         systemd_failed = context.get("systemd_failed", [])
+        detail = context.get("systemd_failed_detail", [])
         if not section and not systemd_failed:
             return
         _append(lines, ["## Failed systemd units"])
-        if systemd_failed:
+        if detail:
+            for item in detail:
+                _append(lines, [_systemd_line(item)])
+        elif systemd_failed:
             for unit in systemd_failed:
                 _append(lines, [f"- `{unit}`"])
         elif section and section["type"] == "broad":
@@ -249,12 +273,12 @@ def _append_section_env(lines: list[str], plan_results: dict) -> None:
         return
 
     _append(lines, ["## Environment variables"])
+    _append(lines, ["_Only whether each variable is set; values are never collected._"])
     for item in section.get("items", []):
         name = item.get("name", "")
-        value = item.get("value", "")
         status = item.get("status", "")
         if status == "set":
-            _append(lines, [f"- `{name}` = `{value}` ✓"])
+            _append(lines, [f"- `{name}` — set ✓"])
         else:
             _append(lines, [f"- `{name}` — unset ✗"])
 
@@ -278,6 +302,44 @@ def _append_section_health_commands(lines: list[str], plan_results: dict) -> Non
             _append(lines, ["  ```", *stderr.splitlines(), "  ```"])
 
 
+def _append_section_snap(lines: list[str], context: dict) -> None:
+    """Snap status and failed-snap logs.
+
+    The reader (context["snap"]) is empty on hosts without snapd and when
+    nothing has failed, so the whole section is omitted in that case.
+    """
+    snap = context.get("snap") or {}
+    if not snap:
+        return
+
+    _append(lines, ["## Snap packages"])
+    packages = snap.get("packages", [])
+    if packages:
+        _append(lines, ["```", *packages, "```"])
+    else:
+        _append(lines, ["_Not available._"])
+
+    services = snap.get("services", [])
+    if services:
+        _append(lines, ["## Snap services", "```", *services, "```"])
+
+    failed_changes = snap.get("failed_changes", [])
+    if failed_changes:
+        _append(lines, ["## Failed snap changes", "```", *failed_changes, "```"])
+
+    for snap_name, snap_lines in sorted((snap.get("logs") or {}).items()):
+        _append(lines, [
+            f"## Snap logs: `{snap_name}` (failed)", "```", *snap_lines, "```",
+        ])
+
+
+def _append_section_k8s_previous_logs(lines: list[str], context: dict) -> None:
+    previous = context.get("k8s_previous_logs", [])
+    if not previous:
+        return
+    _append(lines, ["## Previous container logs", "```", *previous, "```"])
+
+
 def _append_section_charm_config(lines: list[str], context: dict) -> None:
     charm_config = context.get("charm_config", {})
     config_yaml = charm_config.get("config_yaml", "")
@@ -295,9 +357,12 @@ def _append_section_charm_config(lines: list[str], context: dict) -> None:
         return
 
     _append(lines, ["## Charm config"])
-    for key, opt in sorted(options.items()):
+    items = sorted(options.items())
+    for key, opt in items[:_MAX_CHARM_OPTIONS]:
         default = opt.get("default", "")
         _append(lines, [f"- `{key}`: `{default}`"])
+    if len(items) > _MAX_CHARM_OPTIONS:
+        _append(lines, [f"_… {len(items) - _MAX_CHARM_OPTIONS} more options omitted._"])
 
 
 def _append_section_disk(lines: list[str], context: dict) -> None:
@@ -410,6 +475,28 @@ def _append_section_juju_config(lines: list[str], context: dict) -> None:
     _append(lines, ["```", "_(* = changed from default)_"])
 
 
+def _container_label(c: dict) -> str:
+    """Container state including the reason and exit code.
+
+    The reason is the diagnosis: `CrashLoopBackOff` while waiting, `OOMKilled`
+    with an exit code once terminated.
+    """
+    label = c.get("state", "?")
+    if c.get("state_reason"):
+        label += f"/{c['state_reason']}"
+    if c.get("exit_code"):
+        label += f" exit={c['exit_code']}"
+    last = c.get("last_state")
+    if last and last != "unknown":
+        last_label = last
+        if c.get("last_state_reason"):
+            last_label += f"/{c['last_state_reason']}"
+        if c.get("last_exit_code"):
+            last_label += f" exit={c['last_exit_code']}"
+        label += f", last={last_label}"
+    return label
+
+
 def _append_section_k8s_pod(lines: list[str], context: dict) -> None:
     pod = context.get("k8s_pod", {})
     if not pod:
@@ -436,7 +523,7 @@ def _append_section_k8s_pod(lines: list[str], context: dict) -> None:
         for c in containers:
             icon = "✓" if c.get("ready") else "✗"
             _append(lines, [
-                f"- `{c.get('name')}` ({c.get('state', '?')}) "
+                f"- `{c.get('name')}` ({_container_label(c)}) "
                 f"ready={c.get('ready')} restarts={c.get('restartCount')} {icon}",
                 f"  image: `{c.get('image', '')}`",
             ])
@@ -445,6 +532,15 @@ def _append_section_k8s_pod(lines: list[str], context: dict) -> None:
             for probe_kind in ("liveness", "readiness"):
                 if c.get(probe_kind):
                     _append(lines, [f"  {probe_kind}: {c[probe_kind]}"])
+
+    init_containers = pod.get("init_containers", [])
+    if init_containers:
+        _append(lines, ["", "**Init containers:**", ""])
+        for c in init_containers:
+            icon = "✓" if c.get("ready") else "✗"
+            _append(lines, [
+                f"- `{c.get('name')}` ({_container_label(c)}) ready={c.get('ready')} {icon}"
+            ])
 
     volumes = pod.get("volumes", [])
     if volumes:
