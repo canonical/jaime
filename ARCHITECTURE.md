@@ -836,6 +836,75 @@ by keeping the feature opt-in — the default empty `watch-applications` opens n
 controller connection and needs no credentials, leaving existing deployments
 unchanged.
 
+#### Context evidence and prompt projection
+
+The report is the persisted evidence artifact and the prompt is built from it.
+Today the report is sent to the provider verbatim, so prompt size equals report
+size and there is no way to keep more evidence without paying for it in tokens.
+
+Decided: **collect and persist more evidence in the report, and optimise only
+the prompt.** The two stages have different jobs.
+
+- **Collection and persistence** apply *safety* bounds only: time, lines, bytes,
+  timeouts, and redaction. Caps exist to stop a section running away, not to
+  judge relevance, so the bounded evidence stays in the report.
+- **Prompt projection** applies *relevance*: tiering, digests, cross-section
+  de-duplication and a token budget. This is lossy for the prompt, never for the
+  report.
+
+The reasons:
+
+- The report must stand on its own as evidence for a human, and
+  `AGENTS.md` requires raw collected evidence to be retained. What an LLM found
+  relevant at the time is not a substitute.
+- Token cost is incurred only by the prompt. Report size costs local disk, which
+  is cheap, so shrinking the report buys nothing and loses evidence.
+- An incident cannot be re-collected without waiting for another one. A richer
+  report lets the operator re-run `get-suggestion`, with additional context,
+  against evidence already on disk.
+- The projection is a deterministic function of the stored report, a budget and
+  a projection version, so it is reproducible without persisting a second
+  artifact. This requires the report to keep stable section headings.
+
+Two categories are still filtered at collection, because sending them raw is
+unsafe or unbounded rather than merely expensive: unit and container logs
+(error/warning filter plus de-duplication), and secrets. Environment variables
+are reported as set/unset only, never by value, and other secret-bearing config
+values are redacted before the report is written. There is currently **no
+redaction anywhere**, while the Kubernetes report renders every option value of
+the watched application, so redaction is a prerequisite for collecting more.
+
+The descriptive statements that "there is no separate raw context bundle" and
+that "the AI is given the stored report" (see Incident flow and Optional AI
+diagnosis) are revised when the projection lands, not before.
+
+Per-source treatment:
+
+| Context item | Report (safety cap) | Prompt projection |
+| --- | --- | --- |
+| unit logs | `max-context-lines`, error/warning filter + dedup | Tier 1 |
+| plan log files | per file and total capped | Tier 2 |
+| broad processes | `max-context-lines` | Tier 2 |
+| broad network ports | `max-context-lines` | Tier 2 |
+| socket statistics (`ss`) | bounded raw list | Tier 3 digest |
+| firewall rules | `min(max-context-lines, 100)` per table | Tier 3 digest |
+| failed systemd units | `min(max-context-lines, 50)` | Tier 1 when non-empty |
+| systemd unit detail | one compact line per unit | Tier 1 when failed, else Tier 2 |
+| charm config | option count capped | Tier 3 digest |
+| health commands | `min(max-context-lines, 100)` per stream | Tier 2 until allowlisted (4.11) |
+| environment variables | names and set/unset, never values | Tier 2 |
+| plan item counts | per-section item caps | - |
+| k8s unit logs | per container and per pod capped | Tier 1 |
+| k8s events | fetched, sorted, Warning kept and Normal counted | Tier 1 (Warning), rest counted |
+| k8s pod and containers | current and last state, init containers | Tier 1 |
+| k8s previous-container logs | bounded, only when restarted | Tier 2 |
+| snap status and services | `max-context-lines` | Tier 2 |
+| failed snap logs | 3 snaps, latest error ± 10 lines | Tier 1 when non-empty |
+| disk, memory | small, capped | Tier 3 digest |
+
+Every collected line additionally carries a per-line byte cap, so one
+pathological line cannot defeat a line-count bound.
+
 ## Phase 5 – CI/CD, integration tests and CharmHub release
 
 Run all three unit suites and lint on every change, add integration tests that deploy the charms and drive a real fault through to a suggestion, then publish to CharmHub with tracks and channels. CI comes first in the implementation order, ahead of Phase 4, because it is cheap and guards everything after it.
