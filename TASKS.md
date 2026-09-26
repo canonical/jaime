@@ -372,8 +372,8 @@ automatically, and this task does not need rewriting each time.
 The description alignment below touches only keys that are already shared, so it
 is safe to do at any point.
 
-- [ ] [test] Assert shared option keys, types and defaults match across both charms, computed as the intersection rather than hardcoded
-- [ ] [charm] Align the drifted descriptions: `api-token`, `watch-statuses`, `log-window-minutes`, `report-dir`
+- [x] [test] Assert shared option keys, types and defaults match across both charms, computed as the intersection rather than hardcoded
+- [x] [charm] Align the drifted descriptions: `api-token`, `watch-statuses`, `log-window-minutes`, `report-dir`
 
 ### 4.5. Report content
 
