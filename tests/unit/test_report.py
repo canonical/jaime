@@ -279,3 +279,104 @@ class TestReportPlanResults:
         # Raw YAML content should NOT appear
         assert "Listen port" not in content
         assert "description" not in content
+
+
+def _render(tmp_path, context):
+    path = generate_report(
+        INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, context, str(tmp_path)
+    )
+    with open(path) as f:
+        return f.read()
+
+
+class TestSnapSection:
+    def test_renders_failed_snap_and_logs(self, tmp_path):
+        context = {
+            "snap": {
+                "packages": ["postgresql 16 1 latest/stable canonical -"],
+                "services": ["postgresql.primary enabled failed -"],
+                "failed_changes": ["9 Error today today Start postgresql"],
+                "logs": {"postgresql": ["ERROR could not start"]},
+            }
+        }
+        report = _render(tmp_path, context)
+        assert "## Snap packages" in report
+        assert "## Snap services" in report
+        assert "## Failed snap changes" in report
+        assert "## Snap logs: `postgresql` (failed)" in report
+        assert "ERROR could not start" in report
+
+    def test_omitted_when_no_snap_context(self, tmp_path):
+        assert "## Snap" not in _render(tmp_path, {"unit_logs": []})
+
+
+class TestSystemdDetail:
+    def test_failed_units_show_restarts_and_exit(self, tmp_path):
+        context = {
+            "systemd_failed": ["postgresql.service"],
+            "systemd_failed_detail": [{
+                "unit": "postgresql.service", "status": "failed",
+                "substate": "dead", "restarts": "5", "exec_main_status": "1",
+            }],
+        }
+        report = _render(tmp_path, context)
+        assert "restarts=5" in report
+        assert "exec=1" in report
+
+
+class TestEnvironmentSection:
+    def test_reports_set_and_unset_without_values(self, tmp_path):
+        context = {"plan_results": {"env_variables": {"type": "plan", "items": [
+            {"name": "PGDATA", "status": "set"},
+            {"name": "PGPORT", "status": "unset"},
+        ]}}}
+        report = _render(tmp_path, context)
+        assert "`PGDATA` — set" in report
+        assert "`PGPORT` — unset" in report
+        assert "values are never collected" in report
+
+
+class TestPreviousLogs:
+    def test_renders_previous_container_logs(self, tmp_path):
+        context = {"k8s_previous_logs": ["=== container (previous): postgresql ===", "panic: oom"]}
+        report = _render(tmp_path, context)
+        assert "## Previous container logs" in report
+        assert "panic: oom" in report
+
+
+class TestContainerDetailRendering:
+    def test_container_label_carries_reason_and_last_state(self, tmp_path):
+        context = {"k8s_pod": {
+            "name": "app-0", "phase": "Running",
+            "containers": [{
+                "name": "workload", "ready": False, "restartCount": 4,
+                "state": "waiting", "state_reason": "CrashLoopBackOff",
+                "last_state": "terminated", "last_state_reason": "OOMKilled",
+                "last_exit_code": "137",
+            }],
+            "init_containers": [{
+                "name": "init-db", "ready": True, "state": "terminated",
+                "state_reason": "Completed", "exit_code": "0",
+            }],
+        }}
+        report = _render(tmp_path, context)
+        assert "CrashLoopBackOff" in report
+        assert "last=terminated/OOMKilled exit=137" in report
+        assert "**Init containers:**" in report
+        assert "`init-db`" in report
+
+
+class TestExecutiveSummary:
+    def test_config_options_relabelled_not_misleading(self, tmp_path):
+        config_yaml = "options:\n  port:\n    default: 5432\n"
+        report = _render(tmp_path, {"charm_config": {"config_yaml": config_yaml}})
+        assert "Charm options with non-empty schema defaults" in report
+        assert "Explicitly enabled" not in report
+
+
+class TestCharmConfigCap:
+    def test_options_capped(self, tmp_path):
+        options = "\n".join(f"  opt{i}:\n    default: v{i}" for i in range(150))
+        config_yaml = f"options:\n{options}\n"
+        report = _render(tmp_path, {"charm_config": {"config_yaml": config_yaml}})
+        assert "more options omitted" in report

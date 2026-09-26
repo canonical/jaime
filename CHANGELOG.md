@@ -4,6 +4,11 @@
 
 ### Changes
 
+- Generate the example plan and report from the real code. `make examples` regenerates `examples/diagnostics.json` and `examples/report.md`, and a test fails when the committed files drift from the generator, so the documented report shape cannot go stale again. `ARCHITECTURE.md` now records the report's section order, which sections are substrate-specific, and the omission rules
+- Bound every collected item in time, lines or bytes. Previously unbounded sections (firewall rules, `systemctl --failed`, broad ports, socket statistics, charm config, health-command output) are now capped per section, every line has a byte cap so one pathological line cannot defeat a line-count bound, and plan item counts are capped so a large plan cannot multiply the per-item limit. `max-context-lines` is a per-item cap, not a report total
+- Report environment variables as set/unset only, never by value. The collector reads Jaime's own hook environment rather than the workload's, so a value was both misleading and a secret-exposure risk
+- Collect socket statistics once (removing the duplicate `ss` invocation) and without `sudo`, since hooks already run as root
+- Relabel the executive summary's config list: it shows charm options with non-empty schema defaults, not options the operator changed
 - Align the shared config descriptions between the two charms (`api-token`, `watch-statuses`, `log-window-minutes`, `report-dir`) and add a test asserting that the intersection of the two option sets agrees on keys, types, defaults and descriptions. A key moving into the shared set is covered automatically; the two options whose reach is genuinely substrate-specific (`juju-api-user`, `watch-applications`) are allowlisted with a stated reason
 - Change the default OpenRouter model from `deepseek/deepseek-chat` to `~deepseek/deepseek-v4-flash-latest`. The legacy model's shared free pool is routinely rate-limited upstream (HTTP 429), and v4-flash is effectively free with substantially more capacity; the `~` prefix tracks OpenRouter's latest v4-flash release
 - Replace em-dashes with colons in user-facing output: unit status messages (e.g. `Ready: no apps in watch-applications`), action results, and action failure messages (`no suggestion available: mode is 'observe'`). Em-dashes remain only in docstrings, comments, debug-log lines, and report prose
@@ -19,6 +24,8 @@
 
 ### Features
 
+- Add snap diagnostics to machine incident reports: snap package and service status, plus failed snaps identified from non-active services and failed `snap changes`, with an error window from `snap logs` for the failing service only
+- Add systemd service detail to machine reports, and to k8s reports the container current and last state (including `CrashLoopBackOff`/`OOMKilled` reasons and exit codes), init-container state, and previous-instance logs for containers that have restarted
 - Add opt-in controller access to the machine charm so it can watch co-located units it is not related to. `watch-applications` names applications whose units on the same machine are monitored, and `*` means every co-located unit; the principal is always watched from the local `goal-state` hook tool, so the empty default needs no credentials and keeps working when the controller is unreachable. Reach is bounded to the host, because the collectors read the local machine. `juju-api-user`/`juju-api-password` are required only when the option is non-empty, and missing or rejected credentials produce a blocked status
 - Detect other Jaime units on the same machine and report them in the unit status. Two Jaime units on one host would open duplicate incidents for the same fault; deduplication needs the peer relation and is deferred to Phase 6.1
 - Walk subordinate units in `extract_unit_statuses`. Juju nests them under their principal unit rather than in their own application's `units`, and reports their `machine` as an empty string, so the shared extractor now inherits the principal's machine and returns a `machine` field for every unit, enabling host filtering

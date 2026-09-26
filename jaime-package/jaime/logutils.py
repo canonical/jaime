@@ -11,6 +11,25 @@ import re
 
 _ERROR_RE = re.compile(r"(error|warning)", re.IGNORECASE)
 
+# A single pathological line — a stack trace, a large SQL statement, a whole
+# JSON document — would otherwise defeat a line-count bound. Every collected
+# line is truncated to this many characters before it reaches the report.
+MAX_LINE_CHARS = 2048
+
+
+def truncate_line(line: str, max_chars: int = MAX_LINE_CHARS) -> str:
+    """Truncate a single line, marking that it was cut."""
+    if len(line) <= max_chars:
+        return line
+    return line[:max_chars] + f" … (+{len(line) - max_chars} chars truncated)"
+
+
+def cap_lines(lines: list[str], max_lines: int,
+              max_chars: int = MAX_LINE_CHARS) -> list[str]:
+    """Tail-bound to ``max_lines`` and truncate every line to ``max_chars``."""
+    tail = lines[-max_lines:] if len(lines) > max_lines else lines
+    return [truncate_line(line, max_chars) for line in tail]
+
 
 def filter_error_context(lines: list[str], max_lines: int,
                          context_window: int = 3) -> list[str]:

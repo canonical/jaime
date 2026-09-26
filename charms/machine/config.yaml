@@ -45,7 +45,7 @@ options:
     default: 30
   max-context-lines:
     type: int
-    description: "Maximum number of log/context lines to include in a report context bundle."
+    description: "Per-item cap on collected lines. Some sections apply a tighter cap (for example socket statistics and firewall rules). This is not a report or prompt total."
     default: 500
   report-dir:
     type: string

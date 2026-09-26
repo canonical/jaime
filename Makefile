@@ -15,7 +15,7 @@ PRINCIPAL_CHARM ?= $(JAIME_PRINCIPAL_CHARM)
 .PHONY: help lint test test-shared test-machine test-k8s \
         pack pack-all pack-machine pack-k8s \
         integration integration-machine integration-k8s \
-        clean distclean check-principal deploy deploy-k8s remove remove-k8s
+        examples clean distclean check-principal deploy deploy-k8s remove remove-k8s
 
 help:
 	@echo "Available commands:"
@@ -24,6 +24,7 @@ help:
 	@echo "  make test-machine  - Run the machine charm suite"
 	@echo "  make test-k8s      - Run the k8s charm suite"
 	@echo "  make lint          - Run ruff over the repository"
+	@echo "  make examples      - Regenerate examples/ from the report generator"
 	@echo "  make integration   - Integration tests (needs a Juju controller)"
 	@echo "  make pack-machine  - Pack the machine subordinate charm into $(DIST_DIR)/"
 	@echo "  make pack-k8s      - Pack the Kubernetes standalone charm into $(DIST_DIR)/"
@@ -51,6 +52,10 @@ test-k8s:
 
 lint:
 	ruff check .
+
+examples:
+	@if [ -x .venv/bin/python ]; then .venv/bin/python scripts/generate_examples.py; \
+	else python3 scripts/generate_examples.py; fi
 
 # ---------------------------------------------------------------------------
 # Integration tests

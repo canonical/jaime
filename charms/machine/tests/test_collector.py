@@ -16,6 +16,18 @@ from jaime.collector import (
 )
 
 
+def _no_background_io():
+    """Stub the collectors that shell out, so tests stay hermetic."""
+    return mock.patch.multiple(
+        "jaime.collector",
+        collect_snap_context=mock.MagicMock(return_value={}),
+        collect_ss_connections=mock.MagicMock(return_value=[]),
+        collect_firewall_rules=mock.MagicMock(return_value={}),
+        collect_charm_config=mock.MagicMock(return_value={}),
+        _collect_systemd_failed_detail=mock.MagicMock(return_value=[]),
+    )
+
+
 def _make_tracing_payload(events: list[tuple[str, str, str]], ts_ns: int) -> bytes:
     """Build a minimal OTLP JSON payload for testing."""
     evt_list = []
@@ -299,7 +311,8 @@ class TestCollectMemorySummary:
 
 class TestCollectContext:
     def test_returns_all_sections(self):
-        with mock.patch("jaime.collector.collect_unit_logs", return_value=["log line"]), \
+        with _no_background_io(), \
+             mock.patch("jaime.collector.collect_unit_logs", return_value=["log line"]), \
              mock.patch("jaime.collector.collect_systemd_failed", return_value=[]), \
              mock.patch("jaime.collector.collect_disk_usage", return_value=["disk line"]), \
              mock.patch("jaime.collector.collect_memory_summary", return_value=["mem line"]):
@@ -312,7 +325,8 @@ class TestCollectContext:
         assert "collected_at" in ctx
 
     def test_collected_at_is_utc_iso(self):
-        with mock.patch("jaime.collector.collect_unit_logs", return_value=[]), \
+        with _no_background_io(), \
+             mock.patch("jaime.collector.collect_unit_logs", return_value=[]), \
              mock.patch("jaime.collector.collect_systemd_failed", return_value=[]), \
              mock.patch("jaime.collector.collect_disk_usage", return_value=[]), \
              mock.patch("jaime.collector.collect_memory_summary", return_value=[]):
@@ -448,21 +462,29 @@ class TestCollectProcesses:
 
 class TestCollectNetworkPorts:
     def test_port_listening(self):
-        with mock.patch("jaime.collector._run", return_value="tcp LISTEN 0 128 0.0.0.0:5432"):
-            result = jcollector._collect_network_ports([{"port": 5432, "protocol": "tcp"}])
+        result = jcollector._collect_network_ports(
+            [{"port": 5432, "protocol": "tcp"}], "tcp LISTEN 0 128 0.0.0.0:5432"
+        )
         assert result[0]["status"] == "listening"
 
     def test_port_not_listening(self):
-        with mock.patch("jaime.collector._run", return_value="tcp LISTEN 0 128 0.0.0.0:80"):
-            result = jcollector._collect_network_ports([{"port": 5432, "protocol": "tcp"}])
+        result = jcollector._collect_network_ports(
+            [{"port": 5432, "protocol": "tcp"}], "tcp LISTEN 0 128 0.0.0.0:80"
+        )
         assert result[0]["status"] == "not_listening"
 
     def test_port_no_false_positive_on_substring_match(self):
         """Port 80 must not match 8080, 8000, or 54320 in the ss output."""
         output = "tcp LISTEN 0 128 0.0.0.0:8080\ntcp LISTEN 0 128 0.0.0.0:8000\ntcp LISTEN 0 128 0.0.0.0:54320"
-        with mock.patch("jaime.collector._run", return_value=output):
-            result = jcollector._collect_network_ports([{"port": 80, "protocol": "tcp"}])
+        result = jcollector._collect_network_ports([{"port": 80, "protocol": "tcp"}], output)
         assert result[0]["status"] == "not_listening"
+
+
+class TestBroadPorts:
+    def test_derives_listening_ports_from_single_ss_collection(self):
+        ss = "tcp LISTEN 0 128 0.0.0.0:5432\ntcp ESTAB 0 0 1.2.3.4:5432"
+        result = jcollector._collect_broad_ports(ss, 100)
+        assert result == ["tcp LISTEN 0 128 0.0.0.0:5432"]
 
 
 class TestCollectHealthCommands:
@@ -513,15 +535,15 @@ class TestCollectHealthCommands:
 
 
 class TestCollectEnvVariables:
-    def test_var_set(self):
+    def test_var_set_never_reports_value(self):
         result = jcollector._collect_env_variables(["PATH"])
         assert result[0]["status"] == "set"
-        assert result[0]["value"] != ""
+        assert "value" not in result[0]
 
     def test_var_unset(self):
         result = jcollector._collect_env_variables(["SOME_UNDEFINED_VAR_XYZ"])
         assert result[0]["status"] == "unset"
-        assert result[0]["value"] == ""
+        assert "value" not in result[0]
 
 
 class TestCollectContextWithPlan:
@@ -549,7 +571,7 @@ class TestCollectContextWithPlan:
             "_collect_env_variables": mock.MagicMock(return_value=[{"name": "PGDATA", "value": "/var/lib/pg", "status": "set"}]),
             "_collect_health_commands": mock.MagicMock(return_value=[{"command": "systemctl is-active postgresql", "returncode": 0, "stdout": "active", "stderr": ""}]),
         }
-        with mock.patch.multiple("jaime.collector", **mocks):
+        with _no_background_io(), mock.patch.multiple("jaime.collector", **mocks):
             ctx = collect_context("postgresql/0", diagnostics_plan=plan)
         pr = ctx["plan_results"]
         assert pr["log_files"]["type"] == "plan"
@@ -580,7 +602,7 @@ class TestCollectContextWithPlan:
             "_collect_broad_processes": mock.MagicMock(return_value=["ps line 1", "ps line 2"]),
             "_collect_broad_ports": mock.MagicMock(return_value=["ss line 1"]),
         }
-        with mock.patch.multiple("jaime.collector", **mocks):
+        with _no_background_io(), mock.patch.multiple("jaime.collector", **mocks):
             ctx = collect_context("postgresql/0", diagnostics_plan=plan)
         pr = ctx["plan_results"]
         assert pr["processes"]["type"] == "broad"
@@ -596,9 +618,129 @@ class TestCollectContextWithPlan:
             "_collect_broad_processes": mock.MagicMock(return_value=["ps line"]),
             "_collect_broad_ports": mock.MagicMock(return_value=["ss line"]),
         }
-        with mock.patch.multiple("jaime.collector", **mocks):
+        with _no_background_io(), mock.patch.multiple("jaime.collector", **mocks):
             ctx = collect_context("postgresql/0", diagnostics_plan=None)
         pr = ctx["plan_results"]
         assert pr["processes"]["type"] == "broad"
         assert pr["network_ports"]["type"] == "broad"
         assert "systemd_failed" in ctx
+
+
+class TestLineCaps:
+    def test_cap_lines_truncates_a_pathological_line(self):
+        from jaime.logutils import cap_lines
+        huge = "x" * (10 * 1024)
+        result = cap_lines([huge], 10)
+        assert len(result) == 1
+        assert "truncated" in result[0]
+        assert len(result[0]) < len(huge)
+
+    def test_cap_lines_tail_bounds(self):
+        from jaime.logutils import cap_lines
+        assert cap_lines([str(i) for i in range(100)], 5) == ["95", "96", "97", "98", "99"]
+
+
+class TestErrorWindow:
+    def test_keeps_latest_error_with_context(self):
+        lines = [f"line {i}" for i in range(30)] + ["ERROR boom"] + [f"after {i}" for i in range(15)]
+        result = jcollector._error_window(lines, 10, 100)
+        assert "ERROR boom" in result
+        assert "line 20" in result      # 10 before
+        assert "after 4" in result      # 10 after
+        assert "line 19" not in result
+
+    def test_falls_back_to_tail_without_error(self):
+        lines = [f"info {i}" for i in range(50)]
+        assert jcollector._error_window(lines, 10, 5) == [f"info {i}" for i in range(45, 50)]
+
+
+class TestSnapContext:
+    def test_no_snap_returns_empty(self):
+        with mock.patch("jaime.collector.shutil.which", return_value=None):
+            assert jcollector.collect_snap_context(100) == {}
+
+    def test_healthy_host_omits_snap_section(self):
+        def fake_run(cmd, timeout=10):
+            if cmd[:2] == ["snap", "list"]:
+                return "Name Version Rev Tracking Publisher Notes\ncore22 1 1 latest/stable canonical -\n"
+            if cmd[:2] == ["snap", "services"]:
+                return "Name Startup Current Notes\ncore22.daemon enabled active -\n"
+            if cmd[:2] == ["snap", "changes"]:
+                return "ID Status Spawn Ready Summary\n1 Done today today Do things\n"
+            return ""
+
+        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
+             mock.patch("jaime.collector._run", side_effect=fake_run):
+            assert jcollector.collect_snap_context(100) == {}
+
+    def test_failed_service_yields_status_and_windowed_logs(self):
+        def fake_run(cmd, timeout=10):
+            if cmd[:2] == ["snap", "list"]:
+                return "Name Version Rev Tracking Publisher Notes\npostgresql 16 1 latest/stable canonical -\n"
+            if cmd[:2] == ["snap", "services"]:
+                return "Name Startup Current Notes\npostgresql.primary enabled failed -\n"
+            if cmd[:2] == ["snap", "changes"]:
+                return "ID Status Spawn Ready Summary\n9 Error today today Start postgresql\n"
+            if cmd[:2] == ["snap", "logs"]:
+                return "\n".join([f"info {i}" for i in range(20)] + ["ERROR could not start"] + [f"tail {i}" for i in range(5)])
+            return ""
+
+        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
+             mock.patch("jaime.collector._run", side_effect=fake_run):
+            ctx = jcollector.collect_snap_context(100)
+        assert ctx["failed_changes"] == ["9 Error today today Start postgresql"]
+        assert any("postgresql.primary" in line for line in ctx["services"])
+        assert any("ERROR could not start" in line for line in ctx["logs"]["postgresql"])
+
+
+class TestSystemdDetail:
+    def test_parses_show_output(self):
+        output = "ActiveState=failed\nSubState=dead\nNRestarts=5\nExecMainStatus=1\n"
+        with mock.patch("jaime.collector._run", return_value=output):
+            result = jcollector._collect_systemd_units(["postgresql.service"])
+        assert result[0]["status"] == "failed"
+        assert result[0]["substate"] == "dead"
+        assert result[0]["restarts"] == "5"
+        assert result[0]["exec_main_status"] == "1"
+
+
+class TestBoundsOnPreviouslyUnbounded:
+    def test_firewall_rules_capped_per_table(self):
+        output = "\n".join(f"rule {i}" for i in range(500)) + "\n"
+        with mock.patch("jaime.collector._run", return_value=output):
+            result = jcollector.collect_firewall_rules(max_lines=25)
+        assert all(len(v) <= 25 for v in result.values())
+        assert result  # at least one table present
+
+    def test_ss_collected_without_sudo_and_capped(self):
+        calls = []
+
+        def fake_run(cmd, timeout=10):
+            calls.append(cmd)
+            return "\n".join(f"tcp LISTEN 0 0 0.0.0.0:{i}" for i in range(100))
+
+        with mock.patch("jaime.collector._run", side_effect=fake_run):
+            result = jcollector.collect_ss_connections(max_lines=10)
+        assert calls == [["ss", "-antlup"]]
+        assert "sudo" not in calls[0]
+        assert len(result) == 10
+
+    def test_systemd_failed_capped(self):
+        output = "\n".join(f"unit{i}.service" for i in range(100)) + "\n"
+        with mock.patch("jaime.collector._run", return_value=output):
+            result = jcollector.collect_systemd_failed(max_lines=7)
+        assert len(result) == 7
+
+    def test_plan_item_counts_capped(self):
+        plan = {"principal_name": "x", "monitoring_plan": {
+            "processes": [{"name": f"p{i}"} for i in range(100)],
+            "systemd_units": [f"u{i}.service" for i in range(100)],
+        }}
+        with _no_background_io(), \
+             mock.patch("jaime.collector._collect_processes", side_effect=lambda items: items), \
+             mock.patch("jaime.collector._collect_systemd_units", side_effect=lambda items: items), \
+             mock.patch("jaime.collector.collect_unit_logs", return_value=[]), \
+             mock.patch("jaime.collector.collect_systemd_failed", return_value=[]):
+            ctx = collect_context("x/0", diagnostics_plan=plan)
+        assert len(ctx["plan_results"]["processes"]["items"]) == jcollector._PLAN_ITEM_CAPS["processes"]
+        assert len(ctx["plan_results"]["systemd_units"]["items"]) == jcollector._PLAN_ITEM_CAPS["systemd_units"]

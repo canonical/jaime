@@ -375,11 +375,62 @@ is safe to do at any point.
 - [x] [test] Assert shared option keys, types and defaults match across both charms, computed as the intersection rather than hardcoded
 - [x] [charm] Align the drifted descriptions: `api-token`, `watch-statuses`, `log-window-minutes`, `report-dir`
 
-### 4.5. Report content
+### 4.5. Report content and collection
 
-- [ ] [python] Add snap and service detail to machine incident reports
-- [ ] [python] Add further pod and container detail to k8s incident reports
-- [ ] [python] Bound every addition by time, lines or bytes and keep it within `max-context-lines`
+Collect more evidence into the report and bound every collected item in time,
+lines or bytes. The report is the persisted evidence artifact; optimising it for
+the model is 4.10's job, not this one. The per-source treatment — safety cap for
+the report, tier for the prompt — is the table in `ARCHITECTURE.md` under
+"Context evidence and prompt projection", which is the single source of truth
+for both tasks.
+
+Caps here are runaway guards, not relevance judgements: keep the bounded
+evidence in the report and do not digest it at collection. The exceptions are
+the high-volume or secret-bearing sources:
+
+- unit and container logs: error/warning filter plus de-duplication
+- environment variables: names and set/unset only, never values
+- secret-bearing config values: redacted before the report is written (4.12)
+
+- [x] [python] Machine: collect snap status (`snap list`, `snap services`) and
+      identify failed snaps from non-active services plus failed `snap changes`
+      (count-bounded). Omit the sections when nothing failed, and on hosts with
+      no snaps
+- [x] [python] Machine: collect `snap logs` only for failed snaps, from the
+      failed service (`<snap>.<app>`), fetching wide with `-n <fetch_cap>` and
+      keeping the last error/warning match with ±10 lines, falling back to the
+      tail when nothing matches. Cap the snaps inspected at 3 and the lines per
+      snap at `min(max-context-lines, 100)`
+- [x] [python] Machine: enrich systemd service detail for plan and failed units
+      with `systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus`
+- [x] [python] Machine: report environment variables as set/unset only; never
+      store, log or emit their values
+- [x] [python] k8s: capture the current `state.waiting.reason` (CrashLoopBackOff)
+      and `lastState.terminated` reason/exit code (OOMKilled), init-container
+      state, and previous-container logs when `restartCount > 0` (new `previous`
+      flag on `get_pod_logs`)
+- [x] [python] Enforce the safety caps from the `ARCHITECTURE.md` table on every
+      collected item, including the per-line byte cap, fixing firewall rules,
+      `systemd --failed`, broad ports, socket statistics, charm config,
+      health-command output, plan item counts and pod log totals. Along the way,
+      collect `ss` once (removing the duplicate between `collect_ss_connections`
+      and `_collect_broad_ports`) and without `sudo` (hooks run as root)
+- [x] [python] Fix the executive summary's "Explicitly enabled config options":
+      it lists truthy schema defaults, not operator-set values. Relabel or remove
+      it
+- [x] [test] Every collector respects its bound, including a deliberately huge
+      single line and a large item count; regression tests for the previously
+      unbounded sections and for the snap error-window selection
+- [x] [docs] Document the report structure in `ARCHITECTURE.md` and regenerate
+      `examples/report.md` (including a failed snap) from the real generator
+- [x] [project] Add `make examples`, which regenerates
+      `examples/diagnostics.json` and `examples/report.md` from the real code
+- [x] [test] Assert the committed examples match the generator byte-for-byte and
+      that the example exercises key sections, so the report schema cannot drift
+
+Part of this change, not separate tasks: update the two context-collection lists
+in `ARCHITECTURE.md`, and correct the `max-context-lines` description to say it
+is a per-item cap tightened per section, not a report total.
 
 ### 4.6. Kubernetes diagnostics plan parity
 
@@ -449,6 +500,83 @@ Future actions in `ARCHITECTURE.md`.
 Known limitation: incidents logged before this change have no `incident-closed`
 row and will be reported as open. Only the most recent incident per unit is
 recoverable from `status-state.json`.
+
+### 4.10. Prompt budget and compaction
+
+4.5 collects and bounds the evidence; this task optimises the prompt. The
+provider receives a bounded, relevance-ranked projection of the stored report,
+while the report remains the full persisted evidence artifact. The per-source
+treatment and the tier model are the table in `ARCHITECTURE.md` under "Context
+evidence and prompt projection".
+
+Tier model:
+
+- Tier 1 — always included, individually bounded: header/status, executive
+  summary, filtered unit logs, failure indicators when present (failed systemd
+  units, failed snap logs, k8s Warning events), pod/container summary and the
+  current and last container states
+- Tier 2 — included while the budget allows: processes, network ports, plan log
+  files, k8s resource usage and previous-container logs, snap status and
+  services, health-command output (only once 4.11 allowlists the commands)
+- Tier 3 — digest only, never raw: disk, memory, `ss` connections, firewall
+  rules, full charm and Juju config dumps
+
+- [ ] [project] Revise the descriptive `ARCHITECTURE.md` statements when the
+      projection lands: "there is no separate raw context bundle" and "the AI is
+      given the stored report". The design is already recorded under "Context
+      evidence and prompt projection"
+- [ ] [python] Build the projection as a pure function of the stored report, a
+      budget and a projection version, so it is reproducible without persisting a
+      second artifact. This requires the report to keep stable section headings
+- [ ] [python] Keep pod events structured (type, reason, count, lastTimestamp)
+      rather than pre-formatted strings, so the projection can keep Warning and
+      count Normal. Structuring belongs here because the projection is its first
+      consumer
+- [ ] [python] Add a global prompt budget (`max-prompt-bytes` or an estimated
+      token count): Tier 1 always fits, Tier 2 until exhausted, Tier 3 reduced to
+      digests, with explicit "… N lines omitted …" markers
+- [ ] [python] De-duplicate across sections: the summary repeats error lines that
+      also appear in "Recent unit logs", and changed config appears twice
+- [ ] [python] Record the projection size and version in the
+      `suggestion-generated` audit event, so the AI interaction stays auditable
+- [ ] [test] Cover under and over budget, Tier 1 never truncated, and identical
+      output for a fixed report and budget
+- [ ] [docs] Document the budget option and the tier model
+
+### 4.11. Diagnostics health-command allowlist
+
+`build_prompt` asks the provider for "health commands", `validate_diagnostics`
+checks only their structure, and `_collect_health_commands` executes them. That
+is arbitrary command execution derived from a model or an operator-supplied
+plan, which `AGENTS.md` tells the security reviewer to reject. `mode: act` is
+already gated behind command allowlisting; the diagnostics plan is not. This is
+tracked separately because bounding the output does not address it.
+
+- [ ] [security] Define an allowlist or safe-command policy for
+      `monitoring_plan.health_commands`
+- [ ] [python] Enforce the policy in `validate_diagnostics` and bound the command
+      output size
+- [ ] [test] Rejected commands never execute; accepted commands are bounded
+- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
+
+### 4.12. Redact secrets from reports and prompts
+
+There is no redaction anywhere. The Kubernetes report renders every config
+option value of the watched application (`report.py`), and unit logs can carry
+tokens, so the persisted report and the prompt can both contain secrets.
+`AGENTS.md` requires secrets never to reach logs, reports or prompts. Collecting
+more evidence (4.5) makes this worse, so redaction is a prerequisite for it.
+
+- [ ] [security] Define what counts as sensitive: config options by name and
+      type, secret-shaped values in logs, and known token formats
+- [ ] [python] Redact before the report is written, so the persisted artifact and
+      the prompt are both clean. Mark the substitution rather than silently
+      deleting evidence, so a reader knows something was removed
+- [ ] [python] Never render secret-typed config values at all; keep only
+      set/unset for them
+- [ ] [test] A planted token in a log line and in a config value never appears in
+      the report, the prompt or the audit log
+- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
