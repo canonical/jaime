@@ -1,15 +1,17 @@
 # Jaime Tasks
 
-Phases 0 to 3.5 are implemented. Phases 4 to 6 are the active plan.
+Phases 0 to 3.5 are implemented. Phases 4 to 6 are the active plan; Phase 7 is
+tracked but deferred.
 
-Later phases and unscoped ideas live in `ARCHITECTURE.md`, which is the roadmap
-source of truth. They are deliberately not listed here until they are worth
-breaking into tasks.
+Later phases and unscoped ideas still live in `ARCHITECTURE.md`, which is the
+roadmap source of truth.
 
 Ordering note: 5.1 (CI) runs ahead of Phase 4 because it is cheap and guards
 every change after it. 5.2 depends on 4.1, since integration tests cannot
 deploy reliably until packaging stops destroying artifacts. 5.3 depends on
-4.2, 4.4 and 4.6.
+4.2, 4.4 and 4.6. 4.11 (documentation) runs last, after incident history, the
+prompt budget and redaction, so `docs/actions.md` and the acceptance tests
+describe the shipped surface rather than a stale one.
 
 ## 0. Phase 0 — Repository bootstrap
 
@@ -379,7 +381,7 @@ is safe to do at any point.
 
 Collect more evidence into the report and bound every collected item in time,
 lines or bytes. The report is the persisted evidence artifact; optimising it for
-the model is 4.10's job, not this one. The per-source treatment — safety cap for
+the model is 4.9's job, not this one. The per-source treatment — safety cap for
 the report, tier for the prompt — is the table in `ARCHITECTURE.md` under
 "Context evidence and prompt projection", which is the single source of truth
 for both tasks.
@@ -390,7 +392,7 @@ the high-volume or secret-bearing sources:
 
 - unit and container logs: error/warning filter plus de-duplication
 - environment variables: names and set/unset only, never values
-- secret-bearing config values: redacted before the report is written (4.12)
+- secret-bearing config values: redacted before the report is written (4.10)
 
 - [x] [python] Machine: collect snap status (`snap list`, `snap services`) and
       treat only a service in the `failed` state as a fault. `disabled`
@@ -470,19 +472,7 @@ application as a fault would block a charm that is working correctly.
 - [ ] [test] Cover the status text for none, one and several applications
 - [ ] [test] Cover a configured application with no unit in reach, asserting it is absent from the status and does not block
 
-### 4.8. Documentation accuracy
-
-The acceptance tests in `ARCHITECTURE.md` and the reference pages under `docs/`
-have drifted from the shipped charms. Nothing links to `docs/` from any other
-file, which is why it rots unnoticed.
-
-- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`. It does not mention the option at all, so 4.3's headline feature has no end-to-end check
-- [ ] [test] Fix step 8 of the Kubernetes acceptance test. It still says empty report sections indicate missing RBAC, which 4.2 replaced with a blocked status
-- [ ] [docs] Rewrite `docs/actions.md`. It documents one of the eight shipped actions, and is wrong about what `diagnose` returns
-- [ ] [docs] Link `docs/` from `README.md` and `CONTRIBUTING.md`, so the reference pages are reachable and drift is noticed
-- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`, which appears under both Changes and Features
-
-### 4.9. Incident history
+### 4.8. Incident history
 
 `show-status` reports current state only, and `status-state.json` keeps just the
 last incident per unit until a new watched episode clears it, so an operator
@@ -501,13 +491,13 @@ Future actions in `ARCHITECTURE.md`.
 - [ ] [charm] Add a `list-incidents` action reading `events.jsonl`, correlating `incident-start` / `report-generated` / `incident-closed` by incident id, with an optional `unit` filter and JSON output; tolerate a missing or malformed log
 - [ ] [charm] Register `list-incidents` in both charms and both `actions.yaml`
 - [ ] [test] Cover open and closed incidents, report-path correlation, the `unit` filter, and an empty or malformed audit log
-- [ ] [docs] Update `docs/actions.md` (coordinate with 4.8) and the `ARCHITECTURE.md` descriptive sections once the code lands
+- [ ] [docs] Update `docs/actions.md` (coordinate with 4.11) and the `ARCHITECTURE.md` descriptive sections once the code lands
 
 Known limitation: incidents logged before this change have no `incident-closed`
 row and will be reported as open. Only the most recent incident per unit is
 recoverable from `status-state.json`.
 
-### 4.10. Prompt budget and compaction
+### 4.9. Prompt budget and compaction
 
 4.5 collects and bounds the evidence; this task optimises the prompt. The
 provider receives a bounded, relevance-ranked projection of the stored report,
@@ -523,7 +513,8 @@ Tier model:
   current and last container states
 - Tier 2 — included while the budget allows: processes, network ports, plan log
   files, k8s resource usage and previous-container logs, snap status and
-  services, health-command output (only once 4.11 allowlists the commands)
+  services, health-command output (once the health-command allowlist lands; see
+  7.1)
 - Tier 3 — digest only, never raw: disk, memory, `ss` connections, firewall
   rules, full charm and Juju config dumps
 
@@ -549,23 +540,7 @@ Tier model:
       output for a fixed report and budget
 - [ ] [docs] Document the budget option and the tier model
 
-### 4.11. Diagnostics health-command allowlist
-
-`build_prompt` asks the provider for "health commands", `validate_diagnostics`
-checks only their structure, and `_collect_health_commands` executes them. That
-is arbitrary command execution derived from a model or an operator-supplied
-plan, which `AGENTS.md` tells the security reviewer to reject. `mode: act` is
-already gated behind command allowlisting; the diagnostics plan is not. This is
-tracked separately because bounding the output does not address it.
-
-- [ ] [security] Define an allowlist or safe-command policy for
-      `monitoring_plan.health_commands`
-- [ ] [python] Enforce the policy in `validate_diagnostics` and bound the command
-      output size
-- [ ] [test] Rejected commands never execute; accepted commands are bounded
-- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
-
-### 4.12. Redact secrets from reports and prompts
+### 4.10. Redact secrets from reports and prompts
 
 There is no redaction anywhere. The Kubernetes report renders every config
 option value of the watched application (`report.py`), and unit logs can carry
@@ -583,6 +558,18 @@ more evidence (4.5) makes this worse, so redaction is a prerequisite for it.
 - [ ] [test] A planted token in a log line and in a config value never appears in
       the report, the prompt or the audit log
 - [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
+
+### 4.11. Documentation accuracy
+
+The acceptance tests in `ARCHITECTURE.md` and the reference pages under `docs/`
+have drifted from the shipped charms. Nothing links to `docs/` from any other
+file, which is why it rots unnoticed.
+
+- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`. It does not mention the option at all, so 4.3's headline feature has no end-to-end check
+- [ ] [test] Fix step 8 of the Kubernetes acceptance test. It still says empty report sections indicate missing RBAC, which 4.2 replaced with a blocked status
+- [ ] [docs] Rewrite `docs/actions.md`. It documents one of the eight shipped actions, and is wrong about what `diagnose` returns
+- [ ] [docs] Link `docs/` from `README.md` and `CONTRIBUTING.md`, so the reference pages are reachable and drift is noticed
+- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`, which appears under both Changes and Features
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
@@ -626,3 +613,24 @@ Today a subordinate Jaime unit runs per principal unit, so a multi-unit applicat
 - [ ] [python] Leader-owned usage accounting across all units
 - [ ] [python] Define the aggregation window across independent `update-status` cadences
 - [ ] [python] Keep unit-level detection; add cluster-level aggregation on top
+
+## 7. Phase 7 — Assisted remediation
+
+Deferred: not part of the 0.1.0 release. The design is in `ARCHITECTURE.md`;
+the tasks are tracked here so the gap is not lost.
+
+### 7.1. Diagnostics health-command allowlist
+
+`build_prompt` asks the provider for "health commands", `validate_diagnostics`
+checks only their structure, and `_collect_health_commands` executes them. That
+is arbitrary command execution derived from a model or an operator-supplied
+plan, which `AGENTS.md` tells the security reviewer to reject. `mode: act` is
+already gated behind command allowlisting; the diagnostics plan is not. Bounding
+the output (4.5) does not address it.
+
+- [ ] [security] Define an allowlist or safe-command policy for
+      `monitoring_plan.health_commands`
+- [ ] [python] Enforce the policy in `validate_diagnostics` and bound the command
+      output size
+- [ ] [test] Rejected commands never execute; accepted commands are bounded
+- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`

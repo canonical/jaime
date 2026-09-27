@@ -208,7 +208,7 @@ failures collapse into one entry before anything is sent to an AI provider.
 ### Report structure
 
 The Markdown report is ordered signal-first, so a reader (or the prompt
-projection in 4.10) can stop reading once the incident is understood. Sections
+projection in 4.9) can stop reading once the incident is understood. Sections
 appear in this order, and a section with no data is omitted entirely rather than
 rendered empty:
 
@@ -944,7 +944,7 @@ Per-source treatment:
 | failed systemd units | `min(max-context-lines, 50)` | Tier 1 when non-empty |
 | systemd unit detail | one compact line per unit | Tier 1 when failed, else Tier 2 |
 | charm config | option count capped | Tier 3 digest |
-| health commands | `min(max-context-lines, 100)` per stream | Tier 2 until allowlisted (4.11) |
+| health commands | `min(max-context-lines, 100)` per stream | Tier 2 until allowlisted (Phase 7 / TASKS 7.1) |
 | environment variables | names and set/unset, never values | Tier 2 |
 | plan item counts | per-section item caps | - |
 | k8s unit logs | per container and per pod capped | Tier 1 |
@@ -975,6 +975,8 @@ Multi-application monitoring is not part of this phase. It landed in 4.3, bounde
 ## Phase 7 – Assisted remediation
 
 Execute operator-approved fixes. Requires command and policy allowlisting, bounded execution, a dry-run or equivalent safety control, a structured audit trail, and rollback metadata where practical. This is what `mode: act` will eventually enable; it is blocked today.
+
+Allowlisting covers **two command-execution surfaces**. The first is `mode: act`, which is blocked until the policy exists. The second is the diagnostics plan: `monitoring_plan.health_commands` are executed by the machine collector **today**, and `validate_diagnostics` checks only their structure. That second surface is a known gap this phase closes; the task breakdown is in `TASKS.md` 7.1.
 
 # Ideas on the roadmap
 
