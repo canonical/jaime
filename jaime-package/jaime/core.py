@@ -151,7 +151,23 @@ class CoreMixin:
                     f"{entry.get('status', 'unknown')} ({short_id})"
                 )
                 return
-        self.unit.status = ActiveStatus("Ready")
+        self.unit.status = ActiveStatus(self._ready_message())
+
+    def _monitored_applications(self) -> list[str]:
+        """Applications resolved as monitored this cycle, substrate-specific.
+
+        The default is empty, so a substrate that does not resolve a set (or a
+        test that does not populate one) reports a plain ``Ready``. Concrete
+        charms override this and cache the set for the cycle.
+        """
+        return []
+
+    def _ready_message(self) -> str:
+        """Active-status text, naming the monitored applications when there are any."""
+        apps = self._monitored_applications()
+        if not apps:
+            return "Ready"
+        return "Ready: monitoring " + ", ".join(apps)
 
     def _watch_statuses(self) -> set[str]:
         return {
@@ -338,7 +354,7 @@ class CoreMixin:
                     "unit %s: workload=%s (not watched, increment=%d)",
                     unit_name, status, increment,
                 )
-            self.unit.status = ActiveStatus("Ready")
+            self.unit.status = ActiveStatus(self._ready_message())
             return
 
         # Time the incident from when Jaime first saw this unit go unhealthy,
@@ -471,14 +487,19 @@ class CoreMixin:
     # ------------------------------------------------------------------
 
     def _on_action_show_status(self, event):
-        """Return the current monitoring state for every tracked unit.
+        """Return the current monitoring state for every monitored unit.
 
         Juju action results are a flat map of scalars, so the per-unit records
         are returned as a JSON array under ``result`` rather than as separate
         keys. A single dict keyed by fixed field names would let each unit
         overwrite the previous one, which is how this action previously
         reported only an arbitrary single unit.
+
+        Records are filtered to the applications resolved as monitored, so an
+        application removed from configuration disappears from the action. The
+        tracker keeps the observation itself for the incident history.
         """
+        monitored = set(self._monitored_applications())
         records = [
             {
                 "unit": unit_name,
@@ -491,6 +512,7 @@ class CoreMixin:
                 "incident-opened-at": (entry.get("incident") or {}).get("opened_at", ""),
             }
             for unit_name, entry in self._status_tracker._state.items()
+            if unit_name.split("/")[0] in monitored
         ]
         event.set_results({"result": json.dumps(records, indent=2)})
 
@@ -629,6 +651,6 @@ class CoreMixin:
                     "timestamp": now,
                 }))
         self._status_tracker.reset()
-        self.unit.status = ActiveStatus("Ready")
+        self.unit.status = ActiveStatus(self._ready_message())
         logger.info("status state cleared")
         event.set_results({"result": "status state cleared"})

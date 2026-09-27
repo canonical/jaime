@@ -69,6 +69,18 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         raw = self.model.config.get("watch-applications", "")
         return [a.strip() for a in raw.split(",") if a.strip()]
 
+    def _monitored_applications(self) -> list[str]:
+        """Applications resolved as monitored, derived from persisted state.
+
+        Only applications that have an observed unit and are still listed in
+        watch-applications count; there is no wildcard on this substrate.
+        Deriving from the tracker, rather than an in-memory per-hook cache,
+        keeps the answer correct outside a monitoring cycle.
+        """
+        watch = set(self._watch_applications())
+        tracked = {name.split("/")[0] for name in self._status_tracker._state}
+        return sorted(app for app in tracked if app in watch)
+
     def _prerequisite_error(self) -> str | None:
         """Return a blocked-status message while prerequisites are unmet.
 

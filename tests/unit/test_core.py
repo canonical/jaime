@@ -133,9 +133,11 @@ class TestConfigChanged:
 
 
 class TestShowStatus:
-    def _run(self, h):
+    def _run(self, h, monitored=None):
         event = mock.MagicMock()
-        h.charm._on_action_show_status(event)
+        with mock.patch.object(h.charm, "_monitored_applications",
+                               return_value=monitored or []):
+            h.charm._on_action_show_status(event)
         return json.loads(event.set_results.call_args[0][0]["result"])
 
     def test_empty_state_returns_empty_list(self):
@@ -159,7 +161,7 @@ class TestShowStatus:
             "increment": 1,
         }
 
-        records = self._run(h)
+        records = self._run(h, ["postgresql", "mysql"])
         assert [r["unit"] for r in records] == ["postgresql/0", "mysql/0"]
         by_unit = {r["unit"]: r for r in records}
         assert by_unit["postgresql/0"]["workload"] == "blocked"
@@ -288,3 +290,30 @@ class TestGetAIProvider:
         charm = self._make({})
         assert charm._default_model("gemini") == "gemini-2.5-flash"
         assert charm._default_model("openrouter") == "~deepseek/deepseek-v4-flash-latest"
+
+
+class TestReadyMessage:
+    def test_default_is_plain_ready(self):
+        h = _make_harness()
+        assert h.charm._ready_message() == "Ready"
+
+    def test_names_monitored_applications(self):
+        h = _make_harness()
+        with mock.patch.object(h.charm, "_monitored_applications",
+                               return_value=["postgresql", "redis"]):
+            assert h.charm._ready_message() == "Ready: monitoring postgresql, redis"
+
+
+class TestShowStatusFilter:
+    def test_filters_to_monitored_applications(self):
+        """An application no longer monitored disappears from the action."""
+        h = _make_harness()
+        h.charm._status_tracker._state = {
+            "a/0": {"status": "active", "increment": 1},
+            "b/0": {"status": "active", "increment": 1},
+        }
+        event = mock.MagicMock()
+        with mock.patch.object(h.charm, "_monitored_applications", return_value=["a"]):
+            h.charm._on_action_show_status(event)
+        records = json.loads(event.set_results.call_args[0][0]["result"])
+        assert [r["unit"] for r in records] == ["a/0"]

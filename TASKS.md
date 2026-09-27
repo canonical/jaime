@@ -457,20 +457,35 @@ from the `ARCHITECTURE.md` ideas list because it gates the CharmHub release.
 ### 4.7. Monitoring transparency
 
 Both charms report `Ready` without saying what they watch. An operator cannot
-tell a healthy charm from a misconfigured one that is watching nothing. This
-gets worse once the machine charm can watch several applications.
+tell a healthy charm from a misconfigured one that is watching nothing, and
+this gets worse once the machine charm can watch several applications.
 
-Naming what is monitored is the whole signal. A configured application with no
-unit in reach is skipped silently rather than reported as an error: its absence
-from the status is what tells the operator, and treating a not-yet-deployed
-application as a fault would block a charm that is working correctly.
+Naming what is monitored is the whole signal: the status lists the applications
+actually **resolved** as monitored, not the configured list.
 
-- [ ] [charm] Name the monitored applications in the machine charm's active status
-- [ ] [charm] Name the monitored applications in the k8s charm's active status
-- [ ] [charm] Skip configured applications with no unit in reach, silently. Do not block, and do not add a warning status for them
-- [ ] [charm] Include the resolved monitored set in the `show-status` action output
-- [ ] [test] Cover the status text for none, one and several applications
-- [ ] [test] Cover a configured application with no unit in reach, asserting it is absent from the status and does not block
+- [x] [charm] Name the resolved monitored applications in the machine charm's
+      active status
+- [x] [charm] Name the resolved monitored applications in the k8s charm's active
+      status
+- [x] [test] Cover the status text for one and several applications. With none
+      the status is unchanged: this task adds nothing for the unmonitored case
+- [x] [test] Cover that the status lists only resolved applications, so a
+      configured application with no unit in reach is absent from the list
+
+Live testing found two gaps. The naming is only populated inside a monitoring
+cycle, so a fresh hook process (config-changed, refresh) reverts to a plain
+`Ready` until the next `update-status`; and `show-status` keeps listing units
+that are no longer monitored, because the tracker never forgets an observation.
+
+- [x] [charm] Derive the monitored set from the persisted tracker state plus the
+      current configuration, instead of an in-memory per-hook cache, so the
+      active status names the applications in **every** hook, not only after an
+      `update-status` cycle
+- [x] [charm] Filter `show-status` to the currently-monitored units, so an
+      application removed from `watch-applications` disappears from the action.
+      The tracker keeps the observation for the incident history in 4.8
+- [x] [test] Cover the naming outside a monitoring cycle (config-changed) and the
+      `show-status` filter after an application is removed
 
 ### 4.8. Incident history
 
