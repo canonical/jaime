@@ -32,8 +32,8 @@ _CAP_FIREWALL = 100
 _CAP_SYSTEMD_FAILED = 50
 _CAP_SYSTEMD_DETAIL = 50
 _CAP_SS = 200
-_CAP_SNAP_LOGS = 3          # failed snaps inspected
-_CAP_SNAP_LINES = 100       # lines per failed snap
+_CAP_SNAP_SERVICES = 3      # failed services whose logs are fetched
+_CAP_SNAP_LINES = 100       # lines per failed service
 _CAP_SNAP_CHANGES = 20
 _CAP_DISK = 100
 _CAP_MEMORY = 50
@@ -514,32 +514,45 @@ def collect_charm_config(unit_name: str, max_lines: int = _CAP_CHARM_CONFIG) -> 
 # Snap diagnostics
 # ---------------------------------------------------------------------------
 #
-# Snap status is only worth a section when something has actually failed, so
-# the whole snap context is omitted on healthy hosts and hosts without snapd.
-# Logs are collected only for failed snaps, from the failing service, centred
-# on the latest error/warning rather than the last N raw lines.
+# Only a service in the `failed` state counts as a fault. `inactive` is the
+# normal state for socket-, dbus- and timer-activated services, and `disabled`
+# means the service (or whole snap) was administratively stopped; neither
+# fetches logs. When a service has failed, the full snap list and services
+# table are included as context, because another snap running can plausibly be
+# the cause. The whole snap context is omitted when nothing has failed, and on
+# hosts without snapd.
 
-def _failed_snap_services(output: str) -> list[tuple[str, str]]:
-    """Return (snap, service) pairs for snap services that are not active."""
-    failed = []
+def _snap_services(output: str) -> list[dict]:
+    """Parse the `snap services` table into service/startup/current records."""
+    services = []
     for line in output.splitlines():
         parts = line.split()
         if len(parts) < 3 or "Startup" in line:
             continue
-        service, _startup, current = parts[0], parts[1], parts[2]
-        if current != "active" and "." in service:
-            failed.append((service.split(".", 1)[0], service))
-    return failed
+        service, startup, current = parts[0], parts[1], parts[2]
+        if "." not in service:
+            continue
+        services.append({
+            "service": service,
+            "snap": service.split(".", 1)[0],
+            "startup": startup,
+            "current": current,
+        })
+    return services
 
 
-def _failed_snap_changes(output: str) -> list[str]:
-    """Return raw rows for snap changes that ended in Error or Undone."""
+def _failed_snap_changes(output: str, snap_names: set[str]) -> list[str]:
+    """Return Error/Undone change rows that mention one of the failing snaps.
+
+    Unfiltered, this fills with unrelated auto-refresh failures such as
+    ``Auto-refresh snap "firefox"``, which say nothing about the incident.
+    """
     failed = []
     for line in output.splitlines():
         parts = line.split()
         if len(parts) < 2 or parts[0] == "ID":
             continue
-        if parts[1] in ("Error", "Undone"):
+        if parts[1] in ("Error", "Undone") and any(name in line for name in snap_names):
             failed.append(line.rstrip())
     return failed
 
@@ -564,7 +577,12 @@ def _error_window(lines: list[str], context_window: int, max_lines: int) -> list
 
 
 def collect_snap_context(max_lines: int = _DEFAULT_MAX_LINES) -> dict:
-    """Collect snap status and failed-snap logs, or {} when nothing failed."""
+    """Collect snap status and failed-service logs, or {} when nothing failed.
+
+    Trigger is a service in the `failed` state only. Disabled and inactive
+    services are not faults; they are still shown in the services table once
+    the section is triggered, as context.
+    """
     if shutil.which("snap") is None:
         return {}
 
@@ -572,27 +590,31 @@ def collect_snap_context(max_lines: int = _DEFAULT_MAX_LINES) -> dict:
     services_out = _run(["snap", "services"])
     changes_out = _run(["snap", "changes"])
 
-    failed_services = _failed_snap_services(services_out)
-    failed_changes = _failed_snap_changes(changes_out)
-    if not failed_services and not failed_changes:
+    services = _snap_services(services_out)
+    failed = [svc for svc in services if svc["current"] == "failed"]
+    if not failed:
         return {}
 
+    failed_snaps = {svc["snap"] for svc in failed}
     fetch_cap = max(max_lines * 4, 200)
     logs = {}
-    for snap, service in failed_services[:_CAP_SNAP_LOGS]:
+    for svc in failed[:_CAP_SNAP_SERVICES]:
         output = _run(
-            ["snap", "logs", "-n", str(fetch_cap), f"{snap}.{service}"],
+            ["snap", "logs", "-n", str(fetch_cap), svc["service"]],
             timeout=15,
         )
         if output:
-            logs[snap] = _error_window(
+            logs[svc["service"]] = _error_window(
                 output.splitlines(), 10, min(max_lines, _CAP_SNAP_LINES)
             )
 
     return {
         "packages": _cap_lines(packages_out.splitlines(), max_lines),
         "services": _cap_lines(services_out.splitlines(), max_lines),
-        "failed_changes": _cap_lines(failed_changes, _CAP_SNAP_CHANGES),
+        "failed_services": [svc["service"] for svc in failed],
+        "failed_changes": _cap_lines(
+            _failed_snap_changes(changes_out, failed_snaps), _CAP_SNAP_CHANGES
+        ),
         "logs": logs,
     }
 

@@ -186,7 +186,7 @@ if plan is available and has items in a section:
   collect per-plan context (tail log files, pgrep processes, systemctl show, ss port check, environment set/unset)
 else for each empty or missing section:
   collect broad fallback (ps aux for processes, systemctl --failed for systemd, listening ports from the ss output)
-collect background context (Juju unit logs, disk usage, memory summary, one socket-statistics collection, firewall rules, charm config, systemd service detail, snap status and failed-snap logs)
+collect background context (Juju unit logs, disk usage, memory summary, one socket-statistics collection, firewall rules, charm config, systemd service detail, snap status and failed-service logs)
 ```
 
 Context collection on the Kubernetes substrate:
@@ -224,10 +224,10 @@ Header: incident id, unit, status, first-seen, generated
 ## Environment variables        set/unset only, never values
 ## Health commands              plan-driven, with exit status and output
 -- machine background --
-## Snap packages               only when a snap has failed
-## Snap services
-## Failed snap changes
-## Snap logs: <snap> (failed)   latest error +/- 10 lines
+## Snap packages               only when a service is in the failed state
+## Snap services               all services, including disabled and inactive
+## Failed snap changes          filtered to the failing snap
+## Snap logs: <snap>.<app>      failed services only, latest error +/- 10 lines
 ## Charm config                 the principal's declared options
 ## Disk usage
 ## Memory
@@ -244,8 +244,12 @@ Header: incident id, unit, status, first-seen, generated
 Two rules matter beyond ordering. Environment variables are reported as
 set/unset only, because the collector reads Jaime's own hook environment rather
 than the workload's, so a value would be misleading as well as a leak. And the
-snap sections are omitted entirely unless something has failed, so a healthy
-host carries no snap noise.
+snap sections appear only when a service is in the **failed** state — a plain
+`inactive` service is normal for socket-, dbus- and timer-activated units, and
+`disabled` means it was administratively stopped, so neither is a fault and
+neither fetches logs. Once the section is present, the full snap list and
+services table are shown as context, because another snap running can plausibly
+be the cause.
 
 The section headings are a **stable contract**, not incidental formatting: the
 prompt projection parses them to tier and compact the report, and
@@ -948,7 +952,7 @@ Per-source treatment:
 | k8s pod and containers | current and last state, init containers | Tier 1 |
 | k8s previous-container logs | bounded, only when restarted | Tier 2 |
 | snap status and services | `max-context-lines` | Tier 2 |
-| failed snap logs | 3 snaps, latest error ± 10 lines | Tier 1 when non-empty |
+| failed snap service logs | 3 failed services, latest error ± 10 lines | Tier 1 when non-empty |
 | disk, memory | small, capped | Tier 3 digest |
 
 Every collected line additionally carries a per-line byte cap, so one

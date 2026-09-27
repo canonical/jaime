@@ -105,6 +105,7 @@ inactive
 Name                  Version   Rev    Tracking       Publisher   Notes
 charmed-postgresql    16.4      123    16/stable      canonical✓  -
 core22                20240920  1622   latest/stable  canonical✓  base
+lxd                   5.21.3    32180  latest/stable  canonical✓  -
 ```
 
 ## Snap services
@@ -112,14 +113,19 @@ core22                20240920  1622   latest/stable  canonical✓  base
 Name                             Startup   Current   Notes
 charmed-postgresql.patroni       enabled   failed    -
 charmed-postgresql.pgbackrest    enabled   active    -
+lxd.daemon                       enabled   active    socket-activated
+lxd.activate                     enabled   inactive  -
+vault.vaultd                     disabled  inactive  -
 ```
+
+**Failed services:** `charmed-postgresql.patroni`
 
 ## Failed snap changes
 ```
 42  Error  today at 09:56  today at 09:56  Start service charmed-postgresql.patroni
 ```
 
-## Snap logs: `charmed-postgresql` (failed)
+## Snap logs: `charmed-postgresql.patroni` (failed)
 ```
 09:55:58 patroni[4321]: INFO: no action. I am (postgresql-0), the leader
 09:56:04 patroni[4321]: ERROR: could not connect to local PostgreSQL

@@ -659,38 +659,72 @@ class TestSnapContext:
         with mock.patch("jaime.collector.shutil.which", return_value=None):
             assert jcollector.collect_snap_context(100) == {}
 
-    def test_healthy_host_omits_snap_section(self):
+    @staticmethod
+    def _fake_run(services, changes, logs=""):
         def fake_run(cmd, timeout=10):
             if cmd[:2] == ["snap", "list"]:
                 return "Name Version Rev Tracking Publisher Notes\ncore22 1 1 latest/stable canonical -\n"
             if cmd[:2] == ["snap", "services"]:
-                return "Name Startup Current Notes\ncore22.daemon enabled active -\n"
+                return "Name Startup Current Notes\n" + services
             if cmd[:2] == ["snap", "changes"]:
-                return "ID Status Spawn Ready Summary\n1 Done today today Do things\n"
+                return "ID Status Spawn Ready Summary\n" + changes
+            if cmd[:2] == ["snap", "logs"]:
+                return logs
             return ""
+        return fake_run
 
+    def test_inactive_and_disabled_services_do_not_trigger(self):
+        """`inactive` is normal for socket/dbus/timer services; disabled is deliberate."""
+        services = (
+            "docker.nvidia-container-toolkit enabled inactive -\n"
+            "lxd.daemon enabled active socket-activated\n"
+            "vault.vaultd disabled inactive -\n"
+        )
+        changes = "7 Done today today Auto-refresh snap \"lxd\"\n"
         with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run", side_effect=fake_run):
+             mock.patch("jaime.collector._run", side_effect=self._fake_run(services, changes)):
+            assert jcollector.collect_snap_context(100) == {}
+
+    def test_unrelated_failed_change_does_not_trigger(self):
+        """An auto-refresh failure for an unrelated snap is not the workload's fault."""
+        services = "lxd.daemon enabled active -\n"
+        changes = '432 Error today today Auto-refresh snap "firefox"\n'
+        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
+             mock.patch("jaime.collector._run", side_effect=self._fake_run(services, changes)):
             assert jcollector.collect_snap_context(100) == {}
 
     def test_failed_service_yields_status_and_windowed_logs(self):
-        def fake_run(cmd, timeout=10):
-            if cmd[:2] == ["snap", "list"]:
-                return "Name Version Rev Tracking Publisher Notes\npostgresql 16 1 latest/stable canonical -\n"
-            if cmd[:2] == ["snap", "services"]:
-                return "Name Startup Current Notes\npostgresql.primary enabled failed -\n"
-            if cmd[:2] == ["snap", "changes"]:
-                return "ID Status Spawn Ready Summary\n9 Error today today Start postgresql\n"
-            if cmd[:2] == ["snap", "logs"]:
-                return "\n".join([f"info {i}" for i in range(20)] + ["ERROR could not start"] + [f"tail {i}" for i in range(5)])
-            return ""
-
+        services = (
+            "charmed-postgresql.patroni enabled failed -\n"
+            "charmed-postgresql.pgbackrest enabled active -\n"
+            "vault.vaultd disabled inactive -\n"
+        )
+        changes = (
+            '432 Error today today Auto-refresh snap "firefox"\n'
+            "42 Error today today Start service charmed-postgresql.patroni\n"
+        )
+        logs = "\n".join([f"info {i}" for i in range(20)] + ["ERROR could not start"] + [f"tail {i}" for i in range(5)])
         with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run", side_effect=fake_run):
+             mock.patch("jaime.collector._run",
+                        side_effect=self._fake_run(services, changes, logs)):
             ctx = jcollector.collect_snap_context(100)
-        assert ctx["failed_changes"] == ["9 Error today today Start postgresql"]
-        assert any("postgresql.primary" in line for line in ctx["services"])
-        assert any("ERROR could not start" in line for line in ctx["logs"]["postgresql"])
+        assert ctx["failed_services"] == ["charmed-postgresql.patroni"]
+        # Only the failing snap's change row survives the filter.
+        assert ctx["failed_changes"] == ["42 Error today today Start service charmed-postgresql.patroni"]
+        # All services are shown as context, including disabled ones.
+        assert any("vault.vaultd" in line for line in ctx["services"])
+        # Logs are keyed by the failing service, not the snap.
+        assert any("ERROR could not start" in line
+                   for line in ctx["logs"]["charmed-postgresql.patroni"])
+
+    def test_failed_services_capped(self):
+        services = "\n".join(f"s{i}.svc enabled failed -" for i in range(10)) + "\n"
+        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
+             mock.patch("jaime.collector._run",
+                        side_effect=self._fake_run(services, "", "ERROR boom")):
+            ctx = jcollector.collect_snap_context(100)
+        # At most _CAP_SNAP_SERVICES services get log fetches.
+        assert len(ctx["logs"]) <= jcollector._CAP_SNAP_SERVICES
 
 
 class TestSystemdDetail:

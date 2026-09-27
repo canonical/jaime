@@ -393,16 +393,22 @@ the high-volume or secret-bearing sources:
 - secret-bearing config values: redacted before the report is written (4.12)
 
 - [x] [python] Machine: collect snap status (`snap list`, `snap services`) and
-      identify failed snaps from non-active services plus failed `snap changes`
-      (count-bounded). Omit the sections when nothing failed, and on hosts with
-      no snaps
-- [x] [python] Machine: collect `snap logs` only for failed snaps, from the
+      treat only a service in the `failed` state as a fault. `disabled`
+      (administratively stopped) and `inactive` (normal for socket, dbus and
+      timer services) never trigger the section or fetch logs. Once triggered,
+      the full snap list and services table are context, and failed
+      `snap changes` are filtered to the failing snap. Omitted on hosts with no
+      snaps
+- [x] [python] Machine: collect `snap logs` only for failed services, from the
       failed service (`<snap>.<app>`), fetching wide with `-n <fetch_cap>` and
       keeping the last error/warning match with ±10 lines, falling back to the
-      tail when nothing matches. Cap the snaps inspected at 3 and the lines per
-      snap at `min(max-context-lines, 100)`
+      tail when nothing matches. Cap the failed services inspected at 3 and the
+      lines per service at `min(max-context-lines, 100)`
 - [x] [python] Machine: enrich systemd service detail for plan and failed units
       with `systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus`
+- [x] [charm] Make `collect-context` collect a real bounded context bundle for
+      the principal, write it to disk and return its path, instead of the
+      placeholder
 - [x] [python] Machine: report environment variables as set/unset only; never
       store, log or emit their values
 - [x] [python] k8s: capture the current `state.waiting.reason` (CrashLoopBackOff)

@@ -290,20 +290,25 @@ def _render(tmp_path, context):
 
 
 class TestSnapSection:
-    def test_renders_failed_snap_and_logs(self, tmp_path):
+    def test_renders_failed_service_and_logs(self, tmp_path):
         context = {
             "snap": {
-                "packages": ["postgresql 16 1 latest/stable canonical -"],
-                "services": ["postgresql.primary enabled failed -"],
-                "failed_changes": ["9 Error today today Start postgresql"],
-                "logs": {"postgresql": ["ERROR could not start"]},
+                "packages": ["charmed-postgresql 16.4 123 16/stable canonical -"],
+                "services": [
+                    "charmed-postgresql.patroni enabled failed -",
+                    "vault.vaultd disabled inactive -",
+                ],
+                "failed_services": ["charmed-postgresql.patroni"],
+                "failed_changes": ["42 Error today today Start service charmed-postgresql.patroni"],
+                "logs": {"charmed-postgresql.patroni": ["ERROR could not start"]},
             }
         }
         report = _render(tmp_path, context)
         assert "## Snap packages" in report
         assert "## Snap services" in report
+        assert "**Failed services:** `charmed-postgresql.patroni`" in report
         assert "## Failed snap changes" in report
-        assert "## Snap logs: `postgresql` (failed)" in report
+        assert "## Snap logs: `charmed-postgresql.patroni` (failed)" in report
         assert "ERROR could not start" in report
 
     def test_omitted_when_no_snap_context(self, tmp_path):

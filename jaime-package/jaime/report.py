@@ -303,10 +303,10 @@ def _append_section_health_commands(lines: list[str], plan_results: dict) -> Non
 
 
 def _append_section_snap(lines: list[str], context: dict) -> None:
-    """Snap status and failed-snap logs.
+    """Snap status and failed-service logs.
 
-    The reader (context["snap"]) is empty on hosts without snapd and when
-    nothing has failed, so the whole section is omitted in that case.
+    The reader (context["snap"]) is empty on hosts without snapd and when no
+    service is in the failed state, so the whole section is omitted then.
     """
     snap = context.get("snap") or {}
     if not snap:
@@ -323,13 +323,17 @@ def _append_section_snap(lines: list[str], context: dict) -> None:
     if services:
         _append(lines, ["## Snap services", "```", *services, "```"])
 
+    failed_services = snap.get("failed_services", [])
+    if failed_services:
+        _append(lines, ["**Failed services:** " + ", ".join(f"`{s}`" for s in failed_services)])
+
     failed_changes = snap.get("failed_changes", [])
     if failed_changes:
         _append(lines, ["## Failed snap changes", "```", *failed_changes, "```"])
 
-    for snap_name, snap_lines in sorted((snap.get("logs") or {}).items()):
+    for service, snap_lines in sorted((snap.get("logs") or {}).items()):
         _append(lines, [
-            f"## Snap logs: `{snap_name}` (failed)", "```", *snap_lines, "```",
+            f"## Snap logs: `{service}` (failed)", "```", *snap_lines, "```",
         ])
 
 

@@ -24,7 +24,7 @@
 
 ### Features
 
-- Add snap diagnostics to machine incident reports: snap package and service status, plus failed snaps identified from non-active services and failed `snap changes`, with an error window from `snap logs` for the failing service only
+- Add snap diagnostics to machine incident reports, triggered only by a snap service in the `failed` state: the full snap list and services table are shown as context, failed `snap changes` are filtered to the failing snap, and `snap logs` gives the error window for the failed service only. Administratively disabled services and normal inactive (socket/dbus/timer) services never trigger the section or fetch logs
 - Add systemd service detail to machine reports, and to k8s reports the container current and last state (including `CrashLoopBackOff`/`OOMKilled` reasons and exit codes), init-container state, and previous-instance logs for containers that have restarted
 - Add opt-in controller access to the machine charm so it can watch co-located units it is not related to. `watch-applications` names applications whose units on the same machine are monitored, and `*` means every co-located unit; the principal is always watched from the local `goal-state` hook tool, so the empty default needs no credentials and keeps working when the controller is unreachable. Reach is bounded to the host, because the collectors read the local machine. `juju-api-user`/`juju-api-password` are required only when the option is non-empty, and missing or rejected credentials produce a blocked status
 - Detect other Jaime units on the same machine and report them in the unit status. Two Jaime units on one host would open duplicate incidents for the same fault; deduplication needs the peer relation and is deferred to Phase 6.1
@@ -38,6 +38,7 @@
 
 ### Bug fixes
 
+- Make `collect-context` collect a real bounded context bundle for the principal and write it to disk, returning its path. It previously returned a fixed placeholder path and collected nothing
 - Fix `show-status` to report every monitored unit. The action built a single flat results dict and overwrote it once per unit, so a charm monitoring more than one unit — the machine charm with `watch-applications`, or the k8s charm watching several applications — returned only an arbitrary single unit. It now returns a JSON array of per-unit records under `result`, identical on both charms, with the list under `result` unchanged in field names and `increment` as a JSON number instead of a string
 - Fix the `charms/k8s/README.md` observer block: `juju grant-secret` grants to an application, not a model, so target `jaime-k8s` instead of `${MODEL_NAME}`, and document granting the AI token secret the same way
 - Fix a misplaced import block in `charms/machine/src/jaime/collector.py`, where `jaime.logutils` was imported halfway down the file
