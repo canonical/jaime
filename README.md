@@ -213,11 +213,11 @@ The diagnostics plan drives what gets collected. It can be:
 
 1. **AI-generated** — on `principal-relation-joined`, Jaime calls Gemini to build a plan for the workload
 2. **Manually configured** — set `diagnostics` config to a JSON monitoring plan
-3. **Empty** — Jaime falls back to broad commands (`ps aux`, `ss -tlnp`, `systemctl --failed`)
+3. **Empty** — Jaime falls back to broad commands (`ps aux`, `systemctl --failed`, and listening ports taken from its single `ss` collection)
 
 Each plan section (`log_files`, `processes`, `systemd_units`, `network.ports`, `env_variables`, `health_commands`) is iterated by the collector, and results appear in the report with status icons (✓/✗).
 
-See `examples/diagnostics.json` for a sample plan and `examples/report.md` for the generated report output.
+See `examples/diagnostics.json` for a sample plan and `examples/report.md` for the generated report output. Both are regenerated from the real code with `make examples`, so they cannot drift.
 
 ## Modes
 

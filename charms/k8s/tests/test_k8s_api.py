@@ -89,6 +89,18 @@ class TestK8sApiClient:
         with mock.patch.object(client, "_request", return_value=None):
             assert client.get_pod_logs("app-0") == []
 
+    def test_get_pod_logs_previous_flag(self):
+        client = _make_client()
+        captured = {}
+
+        def fake_request(path, params=None):
+            captured["params"] = params
+            return ""
+
+        with mock.patch.object(client, "_request", side_effect=fake_request):
+            client.get_pod_logs("app-0", container="workload", previous=True)
+        assert captured["params"]["previous"] == "true"
+
     def test_get_pod_events_formats_lines(self):
         client = _make_client()
         with mock.patch.object(client, "_request", return_value={
@@ -268,10 +280,13 @@ class TestCollectContext:
 
             ctx = collect_context("postgresql-k8s/0")
 
-        # Two containers in the pod → two calls, two headers
-        assert client.get_pod_logs.call_count == 2
+        # Two containers in the pod → two calls; the restarted postgresql
+        # container adds one previous-instance call.
+        assert client.get_pod_logs.call_count == 3
         assert ctx["unit_logs"].count("=== container: charm ===") == 1
         assert ctx["unit_logs"].count("=== container: postgresql ===") == 1
+        assert ctx["k8s_previous_logs"].count("=== container (previous): postgresql ===") == 1
+        assert client.get_pod_logs.call_args_list[-1].kwargs["previous"] is True
 
     def test_missing_pod_returns_empty_context(self):
         with mock.patch("jaime.collector.K8sApiClient") as mock_cls:
@@ -328,3 +343,48 @@ class TestCollectContext:
         assert volumes["certs"]["mounts"] == ["/certs"]
         assert volumes["data"]["source"] == "pvc/pgdata"
         assert volumes["data"]["mounts"] == []
+
+
+class TestContainerDetail:
+    _POD_DETAIL = {
+        "metadata": {"name": "app-0", "annotations": {"unit.juju.is/id": "app/0"}},
+        "spec": {"containers": [{"name": "workload", "image": "app:1"}]},
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [{
+                "name": "workload", "image": "app:1", "ready": False,
+                "restartCount": 4,
+                "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137}},
+            }],
+            "initContainerStatuses": [{
+                "name": "init-db", "image": "busybox", "ready": True, "restartCount": 0,
+                "state": {"terminated": {"reason": "Completed", "exitCode": 0}},
+            }],
+        },
+    }
+
+    def _ctx(self):
+        with mock.patch("jaime.collector.K8sApiClient") as mock_cls:
+            client = mock_cls.return_value
+            client.get_pod_for_unit.return_value = self._POD_DETAIL
+            client.get_pod_logs.return_value = []
+            client.get_pod_events.return_value = []
+            client.get_resource_usage.return_value = []
+            return collect_context("app/0")
+
+    def test_current_and_last_state_reasons(self):
+        ctx = self._ctx()
+        c = ctx["k8s_pod"]["containers"][0]
+        assert c["state"] == "waiting"
+        assert c["state_reason"] == "CrashLoopBackOff"
+        assert c["last_state"] == "terminated"
+        assert c["last_state_reason"] == "OOMKilled"
+        assert c["last_exit_code"] == "137"
+
+    def test_init_containers_captured(self):
+        ctx = self._ctx()
+        init = ctx["k8s_pod"]["init_containers"][0]
+        assert init["name"] == "init-db"
+        assert init["state"] == "terminated"
+        assert init["exit_code"] == "0"

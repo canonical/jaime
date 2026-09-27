@@ -1,15 +1,17 @@
 # Jaime Tasks
 
-Phases 0 to 3.5 are implemented. Phases 4 to 6 are the active plan.
+Phases 0 to 3.5 are implemented. Phases 4 to 6 are the active plan; Phase 7 is
+tracked but deferred.
 
-Later phases and unscoped ideas live in `ARCHITECTURE.md`, which is the roadmap
-source of truth. They are deliberately not listed here until they are worth
-breaking into tasks.
+Later phases and unscoped ideas still live in `ARCHITECTURE.md`, which is the
+roadmap source of truth.
 
 Ordering note: 5.1 (CI) runs ahead of Phase 4 because it is cheap and guards
 every change after it. 5.2 depends on 4.1, since integration tests cannot
 deploy reliably until packaging stops destroying artifacts. 5.3 depends on
-4.2, 4.4 and 4.6.
+4.2, 4.4 and 4.6. 4.11 (documentation) runs last, after incident history, the
+prompt budget and redaction, so `docs/actions.md` and the acceptance tests
+describe the shipped surface rather than a stale one.
 
 ## 0. Phase 0 — Repository bootstrap
 
@@ -375,11 +377,68 @@ is safe to do at any point.
 - [x] [test] Assert shared option keys, types and defaults match across both charms, computed as the intersection rather than hardcoded
 - [x] [charm] Align the drifted descriptions: `api-token`, `watch-statuses`, `log-window-minutes`, `report-dir`
 
-### 4.5. Report content
+### 4.5. Report content and collection
 
-- [ ] [python] Add snap and service detail to machine incident reports
-- [ ] [python] Add further pod and container detail to k8s incident reports
-- [ ] [python] Bound every addition by time, lines or bytes and keep it within `max-context-lines`
+Collect more evidence into the report and bound every collected item in time,
+lines or bytes. The report is the persisted evidence artifact; optimising it for
+the model is 4.9's job, not this one. The per-source treatment — safety cap for
+the report, tier for the prompt — is the table in `ARCHITECTURE.md` under
+"Context evidence and prompt projection", which is the single source of truth
+for both tasks.
+
+Caps here are runaway guards, not relevance judgements: keep the bounded
+evidence in the report and do not digest it at collection. The exceptions are
+the high-volume or secret-bearing sources:
+
+- unit and container logs: error/warning filter plus de-duplication
+- environment variables: names and set/unset only, never values
+- secret-bearing config values: redacted before the report is written (4.10)
+
+- [x] [python] Machine: collect snap status (`snap list`, `snap services`) and
+      treat only a service in the `failed` state as a fault. `disabled`
+      (administratively stopped) and `inactive` (normal for socket, dbus and
+      timer services) never trigger the section or fetch logs. Once triggered,
+      the full snap list and services table are context, and failed
+      `snap changes` are filtered to the failing snap. Omitted on hosts with no
+      snaps
+- [x] [python] Machine: collect `snap logs` only for failed services, from the
+      failed service (`<snap>.<app>`), fetching wide with `-n <fetch_cap>` and
+      keeping the last error/warning match with ±10 lines, falling back to the
+      tail when nothing matches. Cap the failed services inspected at 3 and the
+      lines per service at `min(max-context-lines, 100)`
+- [x] [python] Machine: enrich systemd service detail for plan and failed units
+      with `systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus`
+- [x] [charm] Make `collect-context` collect a real bounded context bundle for
+      the principal, write it to disk and return its path, instead of the
+      placeholder
+- [x] [python] Machine: report environment variables as set/unset only; never
+      store, log or emit their values
+- [x] [python] k8s: capture the current `state.waiting.reason` (CrashLoopBackOff)
+      and `lastState.terminated` reason/exit code (OOMKilled), init-container
+      state, and previous-container logs when `restartCount > 0` (new `previous`
+      flag on `get_pod_logs`)
+- [x] [python] Enforce the safety caps from the `ARCHITECTURE.md` table on every
+      collected item, including the per-line byte cap, fixing firewall rules,
+      `systemd --failed`, broad ports, socket statistics, charm config,
+      health-command output, plan item counts and pod log totals. Along the way,
+      collect `ss` once (removing the duplicate between `collect_ss_connections`
+      and `_collect_broad_ports`) and without `sudo` (hooks run as root)
+- [x] [python] Fix the executive summary's "Explicitly enabled config options":
+      it lists truthy schema defaults, not operator-set values. Relabel or remove
+      it
+- [x] [test] Every collector respects its bound, including a deliberately huge
+      single line and a large item count; regression tests for the previously
+      unbounded sections and for the snap error-window selection
+- [x] [docs] Document the report structure in `ARCHITECTURE.md` and regenerate
+      `examples/report.md` (including a failed snap) from the real generator
+- [x] [project] Add `make examples`, which regenerates
+      `examples/diagnostics.json` and `examples/report.md` from the real code
+- [x] [test] Assert the committed examples match the generator byte-for-byte and
+      that the example exercises key sections, so the report schema cannot drift
+
+Part of this change, not separate tasks: update the two context-collection lists
+in `ARCHITECTURE.md`, and correct the `max-context-lines` description to say it
+is a per-item cap tightened per section, not a report total.
 
 ### 4.6. Kubernetes diagnostics plan parity
 
@@ -413,19 +472,7 @@ application as a fault would block a charm that is working correctly.
 - [ ] [test] Cover the status text for none, one and several applications
 - [ ] [test] Cover a configured application with no unit in reach, asserting it is absent from the status and does not block
 
-### 4.8. Documentation accuracy
-
-The acceptance tests in `ARCHITECTURE.md` and the reference pages under `docs/`
-have drifted from the shipped charms. Nothing links to `docs/` from any other
-file, which is why it rots unnoticed.
-
-- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`. It does not mention the option at all, so 4.3's headline feature has no end-to-end check
-- [ ] [test] Fix step 8 of the Kubernetes acceptance test. It still says empty report sections indicate missing RBAC, which 4.2 replaced with a blocked status
-- [ ] [docs] Rewrite `docs/actions.md`. It documents one of the eight shipped actions, and is wrong about what `diagnose` returns
-- [ ] [docs] Link `docs/` from `README.md` and `CONTRIBUTING.md`, so the reference pages are reachable and drift is noticed
-- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`, which appears under both Changes and Features
-
-### 4.9. Incident history
+### 4.8. Incident history
 
 `show-status` reports current state only, and `status-state.json` keeps just the
 last incident per unit until a new watched episode clears it, so an operator
@@ -444,11 +491,85 @@ Future actions in `ARCHITECTURE.md`.
 - [ ] [charm] Add a `list-incidents` action reading `events.jsonl`, correlating `incident-start` / `report-generated` / `incident-closed` by incident id, with an optional `unit` filter and JSON output; tolerate a missing or malformed log
 - [ ] [charm] Register `list-incidents` in both charms and both `actions.yaml`
 - [ ] [test] Cover open and closed incidents, report-path correlation, the `unit` filter, and an empty or malformed audit log
-- [ ] [docs] Update `docs/actions.md` (coordinate with 4.8) and the `ARCHITECTURE.md` descriptive sections once the code lands
+- [ ] [docs] Update `docs/actions.md` (coordinate with 4.11) and the `ARCHITECTURE.md` descriptive sections once the code lands
 
 Known limitation: incidents logged before this change have no `incident-closed`
 row and will be reported as open. Only the most recent incident per unit is
 recoverable from `status-state.json`.
+
+### 4.9. Prompt budget and compaction
+
+4.5 collects and bounds the evidence; this task optimises the prompt. The
+provider receives a bounded, relevance-ranked projection of the stored report,
+while the report remains the full persisted evidence artifact. The per-source
+treatment and the tier model are the table in `ARCHITECTURE.md` under "Context
+evidence and prompt projection".
+
+Tier model:
+
+- Tier 1 — always included, individually bounded: header/status, executive
+  summary, filtered unit logs, failure indicators when present (failed systemd
+  units, failed snap logs, k8s Warning events), pod/container summary and the
+  current and last container states
+- Tier 2 — included while the budget allows: processes, network ports, plan log
+  files, k8s resource usage and previous-container logs, snap status and
+  services, health-command output (once the health-command allowlist lands; see
+  7.1)
+- Tier 3 — digest only, never raw: disk, memory, `ss` connections, firewall
+  rules, full charm and Juju config dumps
+
+- [ ] [project] Revise the descriptive `ARCHITECTURE.md` statements when the
+      projection lands: "there is no separate raw context bundle" and "the AI is
+      given the stored report". The design is already recorded under "Context
+      evidence and prompt projection"
+- [ ] [python] Build the projection as a pure function of the stored report, a
+      budget and a projection version, so it is reproducible without persisting a
+      second artifact. This requires the report to keep stable section headings
+- [ ] [python] Keep pod events structured (type, reason, count, lastTimestamp)
+      rather than pre-formatted strings, so the projection can keep Warning and
+      count Normal. Structuring belongs here because the projection is its first
+      consumer
+- [ ] [python] Add a global prompt budget (`max-prompt-bytes` or an estimated
+      token count): Tier 1 always fits, Tier 2 until exhausted, Tier 3 reduced to
+      digests, with explicit "… N lines omitted …" markers
+- [ ] [python] De-duplicate across sections: the summary repeats error lines that
+      also appear in "Recent unit logs", and changed config appears twice
+- [ ] [python] Record the projection size and version in the
+      `suggestion-generated` audit event, so the AI interaction stays auditable
+- [ ] [test] Cover under and over budget, Tier 1 never truncated, and identical
+      output for a fixed report and budget
+- [ ] [docs] Document the budget option and the tier model
+
+### 4.10. Redact secrets from reports and prompts
+
+There is no redaction anywhere. The Kubernetes report renders every config
+option value of the watched application (`report.py`), and unit logs can carry
+tokens, so the persisted report and the prompt can both contain secrets.
+`AGENTS.md` requires secrets never to reach logs, reports or prompts. Collecting
+more evidence (4.5) makes this worse, so redaction is a prerequisite for it.
+
+- [ ] [security] Define what counts as sensitive: config options by name and
+      type, secret-shaped values in logs, and known token formats
+- [ ] [python] Redact before the report is written, so the persisted artifact and
+      the prompt are both clean. Mark the substitution rather than silently
+      deleting evidence, so a reader knows something was removed
+- [ ] [python] Never render secret-typed config values at all; keep only
+      set/unset for them
+- [ ] [test] A planted token in a log line and in a config value never appears in
+      the report, the prompt or the audit log
+- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
+
+### 4.11. Documentation accuracy
+
+The acceptance tests in `ARCHITECTURE.md` and the reference pages under `docs/`
+have drifted from the shipped charms. Nothing links to `docs/` from any other
+file, which is why it rots unnoticed.
+
+- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`. It does not mention the option at all, so 4.3's headline feature has no end-to-end check
+- [ ] [test] Fix step 8 of the Kubernetes acceptance test. It still says empty report sections indicate missing RBAC, which 4.2 replaced with a blocked status
+- [ ] [docs] Rewrite `docs/actions.md`. It documents one of the eight shipped actions, and is wrong about what `diagnose` returns
+- [ ] [docs] Link `docs/` from `README.md` and `CONTRIBUTING.md`, so the reference pages are reachable and drift is noticed
+- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`, which appears under both Changes and Features
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
@@ -492,3 +613,24 @@ Today a subordinate Jaime unit runs per principal unit, so a multi-unit applicat
 - [ ] [python] Leader-owned usage accounting across all units
 - [ ] [python] Define the aggregation window across independent `update-status` cadences
 - [ ] [python] Keep unit-level detection; add cluster-level aggregation on top
+
+## 7. Phase 7 — Assisted remediation
+
+Deferred: not part of the 0.1.0 release. The design is in `ARCHITECTURE.md`;
+the tasks are tracked here so the gap is not lost.
+
+### 7.1. Diagnostics health-command allowlist
+
+`build_prompt` asks the provider for "health commands", `validate_diagnostics`
+checks only their structure, and `_collect_health_commands` executes them. That
+is arbitrary command execution derived from a model or an operator-supplied
+plan, which `AGENTS.md` tells the security reviewer to reject. `mode: act` is
+already gated behind command allowlisting; the diagnostics plan is not. Bounding
+the output (4.5) does not address it.
+
+- [ ] [security] Define an allowlist or safe-command policy for
+      `monitoring_plan.health_commands`
+- [ ] [python] Enforce the policy in `validate_diagnostics` and bound the command
+      output size
+- [ ] [test] Rejected commands never execute; accepted commands are bounded
+- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`

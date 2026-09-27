@@ -4,6 +4,7 @@
 import datetime
 import json
 import logging
+import os
 
 from ops import JujuContext
 from ops.charm import CharmBase
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 class JaimeCharm(CoreMixin, CharmBase):
     _diagnostics_dir = "/var/lib/jaime"
     _diagnostics_path = f"{_diagnostics_dir}/diagnostics.json"
+    _context_dir = "/var/lib/jaime/incidents"
 
     def __init__(self, *args):
         super().__init__(*args)
@@ -452,9 +454,37 @@ class JaimeCharm(CoreMixin, CharmBase):
         }
         event.set_results(result)
 
+    def _principal_unit_name(self):
+        """Name of the first related principal unit, or None."""
+        try:
+            for rel in self.model.relations.get("principal", []):
+                units = list(rel.units)
+                if units:
+                    return units[0].name
+        except Exception:
+            pass
+        return None
+
     def _on_action_collect_context(self, event):
+        """Collect a bounded context bundle for the principal and write it to disk."""
         logger.info("collect-context action invoked")
-        event.set_results({"context-path": "/var/lib/jaime/incidents/placeholder-context.json"})
+        unit = self._principal_unit_name()
+        if not unit:
+            event.fail("no principal unit related")
+            return
+
+        context = self._collect_report_context(unit, "")
+        path = os.path.join(
+            self._context_dir, f"{unit.replace('/', '-')}-context.json"
+        )
+        try:
+            os.makedirs(self._context_dir, exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(context, f, indent=2, default=str)
+        except Exception as e:
+            event.fail(f"could not write context bundle: {e}")
+            return
+        event.set_results({"unit": unit, "context-path": path})
 
 
 if __name__ == "__main__":

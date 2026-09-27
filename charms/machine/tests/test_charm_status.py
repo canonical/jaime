@@ -588,3 +588,30 @@ class TestShowUsageAction:
         assert abs(result["cost_usd"] - 0.006) < 1e-9
         assert result["by_model"]["deepseek/deepseek-chat"]["cost_usd"] == 0.001
         assert result["by_model"]["gemini-2.5-flash"]["cost_usd"] == 0.005
+
+
+class TestCollectContextAction:
+    def test_writes_context_bundle_and_returns_path(self, tmp_path):
+        h = make_harness(tmp_path)
+        h.charm._context_dir = str(tmp_path / "incidents")
+        event = mock.MagicMock()
+
+        with mock.patch.object(JaimeCharm, "_collect_report_context",
+                               return_value={"unit_logs": ["line"]}), \
+             mock.patch.object(JaimeCharm, "_principal_unit_name",
+                               return_value="ubuntu/0"):
+            h.charm._on_action_collect_context(event)
+
+        results = event.set_results.call_args[0][0]
+        assert results["unit"] == "ubuntu/0"
+        assert results["context-path"].endswith("ubuntu-0-context.json")
+        with open(results["context-path"]) as f:
+            assert json.load(f) == {"unit_logs": ["line"]}
+
+    def test_fails_without_principal_unit(self, tmp_path):
+        h = make_harness(tmp_path)
+        event = mock.MagicMock()
+        with mock.patch.object(JaimeCharm, "_principal_unit_name", return_value=None):
+            h.charm._on_action_collect_context(event)
+        event.fail.assert_called_once()
+        event.set_results.assert_not_called()
