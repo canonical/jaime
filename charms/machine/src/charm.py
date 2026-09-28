@@ -127,6 +127,29 @@ class JaimeCharm(CoreMixin, CharmBase):
         raw = self.model.config.get("watch-applications", "")
         return [a.strip() for a in raw.split(",") if a.strip()]
 
+    def _monitored_applications(self) -> list[str]:
+        """Applications resolved as monitored, derived from persisted state.
+
+        The principal is always monitored. Co-located applications are the ones
+        with at least one observed unit in the tracker, intersected with the
+        current watch-applications (``*`` means every co-located unit).
+        Deriving from the tracker rather than an in-memory per-hook cache keeps
+        the answer correct in every hook, not only inside a monitoring cycle.
+        """
+        watch = self._watch_applications()
+        wildcard = "*" in watch
+        tracked = {name.split("/")[0] for name in self._status_tracker._state}
+        apps = []
+        principal = self._get_principal_name()
+        if principal:
+            apps.append(principal)
+        for app in sorted(tracked):
+            if app == principal:
+                continue
+            if wildcard or app in watch:
+                apps.append(app)
+        return apps
+
     def _resolve_juju_password(self) -> str:
         """Resolve the Juju API password from config (plain or secret URI)."""
         return self._resolve_secret(
@@ -255,11 +278,11 @@ class JaimeCharm(CoreMixin, CharmBase):
         if not other_jaime:
             return
         logger.warning("other Jaime units co-located on this machine: %s", other_jaime)
-        if isinstance(self.unit.status, ActiveStatus) and self.unit.status.message == "Ready":
+        if isinstance(self.unit.status, ActiveStatus) and self.unit.status.message.startswith("Ready"):
             self.unit.status = ActiveStatus(
-                f"Ready; {len(other_jaime)} other Jaime unit(s) on this machine "
-                f"({', '.join(other_jaime)}); duplicate reports possible "
-                "(deduplication deferred to Phase 6.1)"
+                f"{self._ready_message()}; {len(other_jaime)} other Jaime unit(s) "
+                f"on this machine ({', '.join(other_jaime)}); duplicate reports "
+                "possible (deduplication deferred to Phase 6.1)"
             )
 
     def _log_principal_status(self):

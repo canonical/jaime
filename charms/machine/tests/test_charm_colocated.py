@@ -318,3 +318,64 @@ class TestUpdateStatus:
         assert isinstance(h.charm.unit.status, ActiveStatus)
         assert "other Jaime unit" in h.charm.unit.status.message
         assert "jaime/0" in h.charm.unit.status.message
+        # The monitored set is retained alongside the other-Jaime warning.
+        assert "monitoring ubuntu" in h.charm.unit.status.message
+
+
+class TestMonitoredApplications:
+    """4.7: the active status names the applications actually being watched."""
+
+    def test_ready_message_names_principal(self, tmp_path):
+        h = make_harness(tmp_path)
+        assert h.charm._ready_message() == "Ready: monitoring ubuntu"
+
+    def test_ready_message_plain_without_principal(self, tmp_path):
+        h = make_harness(tmp_path, with_principal=False)
+        assert h.charm._ready_message() == "Ready"
+
+    def test_principal_seeded_when_watch_empty(self, tmp_path):
+        """The principal is always monitored, so it is always named."""
+        h = make_harness(tmp_path)
+        with mock.patch.object(JaimeCharm, "_log_principal_status"):
+            h.charm._on_update_status(mock.MagicMock())
+        assert h.charm._monitored_applications() == ["ubuntu"]
+
+    def test_co_located_apps_added_to_monitored_set(self, tmp_path):
+        h = make_harness(tmp_path, {
+            "watch-applications": "logrotated",
+            "juju-api-user": "observer", "juju-api-password": "pw",
+        })
+        statuses = {"logrotated/0": {"status": "active", "since": "2026-01-01T00:00:00Z"}}
+        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
+             mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None), \
+             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses",
+                               return_value=(statuses, [])):
+            h.charm._on_update_status(mock.MagicMock())
+        assert h.charm._monitored_applications() == ["ubuntu", "logrotated"]
+        assert h.charm.unit.status.message == "Ready: monitoring ubuntu, logrotated"
+
+    def test_unresolved_configured_app_absent(self, tmp_path):
+        """A configured app with no co-located unit is not named."""
+        h = make_harness(tmp_path, {
+            "watch-applications": "ghost",
+            "juju-api-user": "observer", "juju-api-password": "pw",
+        })
+        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
+             mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None), \
+             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses",
+                               return_value=({}, [])):
+            h.charm._on_update_status(mock.MagicMock())
+        assert h.charm._monitored_applications() == ["ubuntu"]
+
+    def test_set_derived_from_tracker_and_config(self, tmp_path):
+        """Derived from persisted observations, so it survives config-changed."""
+        h = make_harness(tmp_path, {"watch-applications": "ubuntu,logrotated"})
+        h.charm._status_tracker._state = {"ubuntu/0": {}, "logrotated/0": {}}
+        assert h.charm._monitored_applications() == ["ubuntu", "logrotated"]
+        h.update_config({"watch-applications": ""})
+        assert h.charm._monitored_applications() == ["ubuntu"]
+
+    def test_wildcard_includes_every_tracked_app(self, tmp_path):
+        h = make_harness(tmp_path, {"watch-applications": "*"})
+        h.charm._status_tracker._state = {"ubuntu/0": {}, "logrotated/0": {}}
+        assert h.charm._monitored_applications() == ["ubuntu", "logrotated"]

@@ -323,6 +323,34 @@ Juju's raw `since` is still recorded, and is reported as `status_since` in the
 incident events for traceability.
 
 
+### Monitoring status text
+
+When a unit is healthy, its active status names the applications actually
+resolved as monitored, so an operator can tell a working charm from one that is
+configured to watch nothing:
+
+```text
+Ready: monitoring postgresql, logrotated
+Ready: monitoring ubuntu                  # machine, principal only
+Ready: no apps in watch-applications      # k8s, nothing configured
+```
+
+- The list is the **resolved** set, not the configured set. A configured
+  application with no unit in reach is simply absent, and its absence is the
+  signal.
+- It is derived from persisted observations intersected with the current
+  configuration, not from an in-memory cache, so it is correct in every hook
+  (`config-changed`, refresh), not only after an `update-status` cycle.
+- The machine charm always monitors its related principal, so it always names at
+  least that, even when `watch-applications` is empty.
+- The k8s charm names the applications among `watch-applications` that had at
+  least one unit. With nothing configured it keeps its existing opt-out text.
+- The text appears only in the active state. Waiting, blocked, maintenance and
+  open-incident statuses are unchanged.
+- `show-status` lists the same resolved applications. An application removed
+  from `watch-applications` disappears from the action, while the tracker keeps
+  the observation itself for the incident history.
+
 ## Modes
 
 ### observe

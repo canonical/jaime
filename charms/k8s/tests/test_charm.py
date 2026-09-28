@@ -288,3 +288,53 @@ class TestShowSetupSteps:
         result = event.set_results.call_args[0][0]["result"]
         assert "jaime-k8s" in result
         assert "juju config jaime-k8s watch-applications" in result
+
+
+class TestMonitoredApplications:
+    """4.7: the active status names the applications actually being watched."""
+
+    _CONFIG = {
+        "watch-applications": "postgresql-k8s,mysql-k8s",
+        "juju-api-user": "jaime-observer",
+        "juju-api-password": "secret",
+    }
+
+    def test_names_resolved_applications(self):
+        h = _make_harness(self._CONFIG)
+        statuses = {"postgresql-k8s/0": {"status": "active", "since": "2026-01-01T00:00:00Z"}}
+        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
+             mock.patch.object(h.charm, "_fetch_unit_statuses", return_value=statuses):
+            h.charm._monitor()
+        assert h.charm._monitored_applications() == ["postgresql-k8s"]
+        assert h.charm.unit.status.message == "Ready: monitoring postgresql-k8s"
+
+    def test_unresolved_application_absent_from_status(self):
+        """mysql-k8s is configured but has no units, so it is not named."""
+        h = _make_harness(self._CONFIG)
+        statuses = {"postgresql-k8s/0": {"status": "active", "since": "2026-01-01T00:00:00Z"}}
+        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
+             mock.patch.object(h.charm, "_fetch_unit_statuses", return_value=statuses):
+            h.charm._monitor()
+        assert "mysql-k8s" not in h.charm.unit.status.message
+
+    def test_no_units_matched_keeps_maintenance(self):
+        h = _make_harness(self._CONFIG)
+        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
+             mock.patch.object(h.charm, "_fetch_unit_statuses", return_value={}):
+            h.charm._monitor()
+        assert isinstance(h.charm.unit.status, MaintenanceStatus)
+        assert h.charm._monitored_applications() == []
+
+    def test_empty_watch_status_unchanged(self):
+        """4.7 adds nothing for the unmonitored case."""
+        h = _make_harness({"watch-applications": ""})
+        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
+            h.charm._monitor()
+        assert h.charm.unit.status.message == "Ready: no apps in watch-applications"
+
+    def test_ready_message_format(self):
+        h = _make_harness(self._CONFIG)
+        h.charm._status_tracker._state = {
+            "postgresql-k8s/0": {}, "mysql-k8s/0": {},
+        }
+        assert h.charm._ready_message() == "Ready: monitoring mysql-k8s, postgresql-k8s"
