@@ -213,8 +213,8 @@ appear in this order, and a section with no data is omitted entirely rather than
 rendered empty:
 
 ```text
-Header: incident id, unit, status, first-seen, generated
-## Executive summary            errors/warnings, operator-visible config
+Header: incident id, unit, status, status-message, first-seen, generated
+## Executive summary            workload status + status message, errors/warnings, operator-visible config
 ## Network ports               plan-driven port checks
 ## Network connections          one ss collection, listening and established
 ## Firewall rules               iptables, ufw, nftables (when present)
@@ -229,6 +229,8 @@ Header: incident id, unit, status, first-seen, generated
 ## Failed snap changes          filtered to the failing snap
 ## Snap logs: <snap>.<app>      failed services only, latest error +/- 10 lines
 ## Charm config                 the principal's declared options
+## Available actions            the principal charm's declared actions (machine)
+## Charm links                  docs/source/issue URLs from metadata.yaml (machine)
 ## Disk usage
 ## Memory
 -- k8s instead of the machine background sections --
@@ -492,6 +494,16 @@ Within that boundary, `watch-applications` selects what to monitor:
 The principal is always monitored. It is the one unit the subordinate is
 explicitly related to, it is readable through `goal-state` with no credentials,
 and watching it is what the operator asked for by creating the relation.
+
+`goal-state` carries only the workload status name and timestamp, not the
+message Juju shows for that status (e.g. "Please initialize OpenBao or
+integrate with an auto-unseal provider"). The message is the operator's most
+direct statement of what is wrong, so it is captured in the report header and
+executive summary. On the machine charm it is read from the controller API and
+merged into the principal observation, but only when credentials are
+configured (the controller-API paths always have it); without credentials the
+message is simply absent. Recovery, waiting and cooldown behaviour are
+unchanged.
 
 A configured application with no unit in reach is skipped silently. The unit
 status names what is being monitored, and absence from that list is what tells

@@ -34,6 +34,16 @@ class TestBuildSuggestPrompt:
         assert "root cause" in prompt.lower()
         assert "bash" in prompt
 
+    def test_warns_against_inventing_actions(self):
+        prompt = build_suggest_prompt("report")
+        assert "Available actions" in prompt
+        assert "never invent an action" in prompt
+
+    def test_urges_use_of_charm_links(self):
+        prompt = build_suggest_prompt("report")
+        assert "Charm links" in prompt
+        assert "Never invent a URL or a procedure" in prompt
+
 
 class TestParseCommands:
     def test_extracts_single_command(self):

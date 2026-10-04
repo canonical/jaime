@@ -19,6 +19,7 @@ class StatusTracker:
             "postgresql/0": {
                 "status": "blocked",
                 "since": "2026-07-14T09:37:54+00:00",
+                "message": "Please initialize the database or provide credentials",
                 "unhealthy_since": "2026-07-14T09:37:54+00:00",
                 "increment": 3,
                 "incident": {
@@ -50,7 +51,10 @@ class StatusTracker:
     ``since`` is Juju's own "status last set" timestamp and is recorded for
     reporting only. ``unhealthy_since`` is Jaime's anchor for how long the
     unit has been unhealthy: it is set when the unit enters a watched status
-    and held steady until the unit recovers.
+    and held steady until the unit recovers. ``message`` is the workload
+    status message ("reason") shown in ``juju status``; it may be empty when
+    the observing path is the machine charm's goal-state hook tool, which
+    carries no message.
 
     An episode is a continuous run of watched (or unwatched) observations.
     The increment, incident, and last_reported reset when the unit crosses
@@ -89,7 +93,7 @@ class StatusTracker:
             logger.warning("could not save status state to %s: %s", self._path, e)
 
     def observe(self, unit: str, status: str, since: str,
-                watched: bool = True) -> int:
+                watched: bool = True, message: str = "") -> int:
         """Record a status observation for a unit.
 
         ``watched`` says whether ``status`` is one of the statuses that open an
@@ -99,6 +103,12 @@ class StatusTracker:
         watched statuses — or one that re-sets the same status with a new
         message, bumping Juju's ``since`` — keeps a single incident and a
         single unhealthy timer.
+
+        ``message`` is the workload status message (the "reason" shown in
+        ``juju status``, e.g. "Please initialize OpenBao or integrate with an
+        auto-unseal provider"). The machine charm's goal-state path has no
+        message, so it may be empty; the controller-API paths (k8s and the
+        machine charm's opt-in co-located watch) carry it.
 
         ``unhealthy_since`` is set from ``since`` when a watched episode starts
         and preserved for its duration. It is cleared on recovery.
@@ -116,6 +126,7 @@ class StatusTracker:
         entry = {
             "status": status,
             "since": since,
+            "message": message,
             "usage_log": previous.get("usage_log", []),
         }
         if new_episode:

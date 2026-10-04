@@ -139,6 +139,20 @@ vault.vaultd                     disabled  inactive  -
 
 - `port`: `5432`
 
+## Available actions
+
+- `get-password` — Retrieve the generated database password
+
+- `restart` — Restart the PostgreSQL service
+
+- `start` — Start the PostgreSQL service
+
+## Charm links
+
+- docs: https://discourse.charmhub.io/t/postgresql-operator/12345
+- source: https://github.com/canonical/postgresql-operator
+- issues: https://github.com/canonical/postgresql-operator/issues
+
 ## Disk usage
 
 ```

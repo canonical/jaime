@@ -379,3 +379,115 @@ class TestMonitoredApplications:
         h = make_harness(tmp_path, {"watch-applications": "*"})
         h.charm._status_tracker._state = {"ubuntu/0": {}, "logrotated/0": {}}
         assert h.charm._monitored_applications() == ["ubuntu", "logrotated"]
+
+
+class TestPrincipalStatusMessages:
+    """Enrichment of the goal-state principal path with Juju's status message."""
+
+    def _messages(self, h, status=None):
+        cm, _ = _mock_client(status=status or _MACHINE_STATUS)
+        with mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
+             mock.patch("charm.parse_agent_conf", return_value={
+                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
+             }), \
+             mock.patch("charm.JujuControllerClient", return_value=cm):
+            return h.charm._principal_status_messages()
+
+    def test_empty_message_omitted(self, tmp_path):
+        """Active units with an empty message yield no entry (caller defaults to '')."""
+        h = make_harness(
+            tmp_path, with_principal=True,
+            config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
+        )
+        messages = self._messages(h)
+        assert messages == {}
+
+    def test_returns_status_reason_messages(self, tmp_path):
+        status = {
+            "applications": {
+                "ubuntu": {
+                    "units": {
+                        "ubuntu/0": {
+                            "machine": "0",
+                            "workload-status": {
+                                "status": "blocked",
+                                "info": "Please initialize OpenBao or integrate with an auto-unseal provider",
+                                "since": "2026-09-23T18:17:01Z",
+                            },
+                        },
+                    },
+                },
+            },
+        }
+        h = make_harness(
+            tmp_path, with_principal=True,
+            config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
+        )
+        messages = self._messages(h, status=status)
+        assert messages == {
+            "ubuntu/0": "Please initialize OpenBao or integrate with an auto-unseal provider"
+        }
+
+    def test_empty_without_credentials(self, tmp_path):
+        h = make_harness(tmp_path, with_principal=True)
+        assert h.charm._principal_status_messages() == {}
+
+    def test_empty_when_controller_unreachable(self, tmp_path):
+        from jaime.controller import ControllerError
+
+        h = make_harness(
+            tmp_path, with_principal=True,
+            config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
+        )
+        cm, _ = _mock_client(status=None)
+        cm.full_status.side_effect = ControllerError("boom")
+        with mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
+             mock.patch("charm.parse_agent_conf", return_value={
+                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
+             }), \
+             mock.patch("charm.JujuControllerClient", return_value=cm):
+            assert h.charm._principal_status_messages() == {}
+
+    def test_message_reaches_process_unit(self, tmp_path):
+        """The principal status message is passed through to the lifecycle."""
+        import datetime
+
+        status = {
+            "applications": {
+                "ubuntu": {
+                    "units": {
+                        "ubuntu/0": {
+                            "machine": "0",
+                            "workload-status": {
+                                "status": "blocked",
+                                "info": "Please initialize OpenBao or integrate with an auto-unseal provider",
+                                "since": "2026-09-23T18:17:01Z",
+                            },
+                        },
+                    },
+                },
+            },
+        }
+        h = make_harness(
+            tmp_path, with_principal=True,
+            config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
+        )
+        cm, _ = _mock_client(status=status)
+        gs = mock.MagicMock()
+        unit = mock.MagicMock()
+        unit.status = "blocked"
+        unit.since = datetime.datetime(2026, 9, 23, 18, 17, 1, tzinfo=datetime.timezone.utc)
+        gs.relations = {"principal": {"ubuntu/0": unit}}
+        with mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
+             mock.patch("charm.parse_agent_conf", return_value={
+                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
+             }), \
+             mock.patch("charm.JujuControllerClient", return_value=cm), \
+             mock.patch("charm.goal_state", return_value=gs), \
+             mock.patch.object(JaimeCharm, "_process_unit") as process:
+            h.charm._log_principal_status()
+        assert process.called
+        args = process.call_args[0]
+        assert args[0] == "ubuntu/0"
+        assert args[1] == "blocked"
+        assert args[3] == "Please initialize OpenBao or integrate with an auto-unseal provider"

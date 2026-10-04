@@ -117,6 +117,23 @@ CONTEXT = {
             "  port:\n"
             "    default: 5432\n"
         ),
+        "actions_yaml": (
+            "start:\n"
+            "  description: Start the PostgreSQL service\n"
+            "restart:\n"
+            "  description: Restart the PostgreSQL service\n"
+            "get-password:\n"
+            "  description: Retrieve the generated database password\n"
+        ),
+        "metadata_yaml": (
+            "name: postgresql\n"
+            "summary: PostgreSQL database\n"
+            "docs: https://discourse.charmhub.io/t/postgresql-operator/12345\n"
+            "source:\n"
+            "- https://github.com/canonical/postgresql-operator\n"
+            "issues:\n"
+            "- https://github.com/canonical/postgresql-operator/issues\n"
+        ),
     },
     "snap": {
         "packages": [

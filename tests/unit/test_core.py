@@ -317,3 +317,29 @@ class TestShowStatusFilter:
             h.charm._on_action_show_status(event)
         records = json.loads(event.set_results.call_args[0][0]["result"])
         assert [r["unit"] for r in records] == ["a/0"]
+
+    def test_record_includes_status_message(self):
+        h = _make_harness()
+        h.charm._status_tracker._state = {
+            "a/0": {
+                "status": "blocked",
+                "message": "Please initialize OpenBao or integrate with an auto-unseal provider",
+                "increment": 1,
+            },
+        }
+        event = mock.MagicMock()
+        with mock.patch.object(h.charm, "_monitored_applications", return_value=["a"]):
+            h.charm._on_action_show_status(event)
+        records = json.loads(event.set_results.call_args[0][0]["result"])
+        assert records[0]["status-message"] == (
+            "Please initialize OpenBao or integrate with an auto-unseal provider"
+        )
+
+    def test_record_status_message_defaults_empty(self):
+        h = _make_harness()
+        h.charm._status_tracker._state = {"a/0": {"status": "active", "increment": 1}}
+        event = mock.MagicMock()
+        with mock.patch.object(h.charm, "_monitored_applications", return_value=["a"]):
+            h.charm._on_action_show_status(event)
+        records = json.loads(event.set_results.call_args[0][0]["result"])
+        assert records[0]["status-message"] == ""

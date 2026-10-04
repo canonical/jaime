@@ -484,10 +484,11 @@ def collect_firewall_rules(max_lines: int = _CAP_FIREWALL) -> dict:
 
 
 def collect_charm_config(unit_name: str, max_lines: int = _CAP_CHARM_CONFIG) -> dict:
-    """Read the principal charm's config.yaml and actions.yaml.
+    """Read the principal charm's config.yaml, actions.yaml and metadata.yaml.
 
-    Returns a dict with keys ``config_yaml`` and ``actions_yaml`` containing
-    the raw file content, or ``""`` if the file is missing/unreadable.
+    Returns a dict with keys ``config_yaml``, ``actions_yaml`` and
+    ``metadata_yaml`` containing the raw file content, or ``""`` if the file is
+    missing/unreadable.
 
     Bounded by line count only, never by truncating a line: the report parses
     this YAML, and a truncated line would break the parse and drop the section.
@@ -495,7 +496,7 @@ def collect_charm_config(unit_name: str, max_lines: int = _CAP_CHARM_CONFIG) -> 
     tag = "unit-" + unit_name.replace("/", "-")
     charm_dir = f"/var/lib/juju/agents/{tag}/charm"
     result = {}
-    for name in ("config.yaml", "actions.yaml"):
+    for name in ("config.yaml", "actions.yaml", "metadata.yaml"):
         path = os.path.join(charm_dir, name)
         try:
             with open(path) as f:

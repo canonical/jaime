@@ -118,7 +118,10 @@ class JaimeCharm(CoreMixin, CharmBase):
 
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         for unit_name, info in statuses.items():
-            self._process_unit(unit_name, info["status"], info.get("since") or now_iso)
+            self._process_unit(
+                unit_name, info["status"], info.get("since") or now_iso,
+                info.get("message", ""),
+            )
 
         self._report_other_jaime_units(other_jaime)
 
@@ -297,6 +300,8 @@ class JaimeCharm(CoreMixin, CharmBase):
             for unit in rel.units:
                 own_principal_units.add(unit.name)
 
+        watched = self._watch_statuses()
+        observations: list[tuple[str, str, str]] = []
         try:
             gs = goal_state()
             principal_relations = gs.relations.get("principal", {})
@@ -305,12 +310,64 @@ class JaimeCharm(CoreMixin, CharmBase):
                     continue
                 if own_principal_units and unit_name not in own_principal_units:
                     continue
-
                 status = goal.status
-                since_iso = goal.since.isoformat()
-                self._process_unit(unit_name, status, since_iso)
+                observations.append((unit_name, status, goal.since.isoformat()))
         except Exception as e:
             logger.warning("could not read principal goal-state: %s", e)
+            return
+
+        # goal-state carries only the status name and timestamp, not the
+        # free-text message shown by `juju status`. When the operator has
+        # configured controller credentials, enrich watched observations with
+        # that message so it reaches the report. Connected only when a watched
+        # status is present, so a healthy principal never opens a controller
+        # connection.
+        messages = {}
+        if any(status in watched for _, status, _ in observations):
+            messages = self._principal_status_messages()
+
+        for unit_name, status, since_iso in observations:
+            self._process_unit(
+                unit_name, status, since_iso, messages.get(unit_name, "")
+            )
+
+    def _principal_status_messages(self) -> dict[str, str]:
+        """Workload status messages for the principal unit, keyed by unit name.
+
+        The principal is monitored from goal-state, which has no message. When
+        controller credentials are configured, the message is read from
+        ``Client.FullStatus`` so the report can carry the reason Juju shows
+        (e.g. "Please initialize OpenBao or integrate with an auto-unseal
+        provider"). Returns an empty mapping — leaving the goal-state path
+        unchanged — when credentials are absent, the principal cannot be
+        resolved, or the controller is unreachable.
+        """
+        principal_app = self._get_principal_name()
+        if not principal_app:
+            return {}
+        username = self.model.config.get("juju-api-user", "")
+        password = self._resolve_juju_password()
+        if not username or not password:
+            return {}
+        conf_path = agent_conf_path(unit_name=self.unit.name)
+        if conf_path is None:
+            return {}
+        try:
+            conf = parse_agent_conf(conf_path)
+            with JujuControllerClient(
+                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
+            ) as client:
+                client.login(username, password)
+                full = client.full_status()
+            statuses = extract_unit_statuses(full, watch_applications=[principal_app])
+            return {
+                name: info.get("message", "")
+                for name, info in statuses.items()
+                if info.get("message")
+            }
+        except Exception as e:
+            logger.debug("could not fetch principal status messages: %s", e)
+            return {}
 
     # ------------------------------------------------------------------
     # Substrate hooks used by CoreMixin

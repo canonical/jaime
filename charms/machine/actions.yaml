@@ -20,7 +20,7 @@ show-status:
   results:
     result:
       type: string
-      description: "JSON array of per-unit records: unit, workload, first-seen, status-since, increment, last-reported, incident-id, incident-opened-at."
+      description: "JSON array of per-unit records: unit, workload, status-message, first-seen, status-since, increment, last-reported, incident-id, incident-opened-at."
 show-usage:
   description: "Show AI token usage and cost. Returns a global summary across all incidents, or per-incident detail if incident-id is provided."
   params:
