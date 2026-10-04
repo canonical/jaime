@@ -5,7 +5,7 @@
   ],
   "packageRules": [
     {
-      "description": "CI pins Python to match the charms' ubuntu@24.04 base, which ships 3.12. Bumping the CI runner alone would break parity with the deployed charm.",
+      "description": "CI pins Python to 3.12, matching the charms' ubuntu@24.04 build, which ships 3.12. The charms are also built for ubuntu@22.04 and ubuntu@26.04 at pack time, but the CI test runner stays on 3.12 to test the same interpreter family as the primary build. Bumping the CI runner alone would break that parity.",
       "matchManagers": [
         "github-actions"
       ],
