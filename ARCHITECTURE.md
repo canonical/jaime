@@ -858,6 +858,8 @@ clear-incident
 
 Phases 1 to 3 are implemented. Phases 4 to 7 are planned. The ideas below are unordered and not committed.
 
+Phase order and the active plan live in `TASKS.md`. A change that alters behaviour, an interface, a config option or a stated boundary is specified under `specs/` before it is implemented, where its decisions, requirements and implementation tasks are recorded.
+
 ## Phase 1 – Machine Observe
 
 Deploy Jaimie as a machine subordinate charm. Detect unhealthy principal units, collect diagnostics, and generate structured incident reports without modifying the environment.
@@ -876,7 +878,7 @@ Adopt the `tests/unit` and `tests/integration` split, move shared-library tests 
 
 ## Phase 4 – Improving user experience
 
-Make both charms pleasant to build, deploy and read output from. Packaging that produces both artifacts without destroying either, Kubernetes deployment that tells the operator what it needs instead of failing silently, consistent configuration across both charms, richer incident reports, and diagnostics-plan parity so the Kubernetes charm collects to a plan as the machine charm already does.
+Make both charms pleasant to build, deploy and read output from. Packaging that produces both artifacts without destroying either, Kubernetes deployment that tells the operator what it needs instead of failing silently, consistent configuration across both charms, richer incident reports, and an operator-supplied Kubernetes diagnostics plan scoped to what the Kubernetes API can observe without exec (container selection, log patterns, env variable names, ports), with AI plan generation deferred.
 
 Machine-charm controller access is accepted, having been deferred pending this
 decision. The machine charm may authenticate to the Juju controller as an

@@ -359,7 +359,8 @@ applications. `*` adds every co-located unit. The principal is always watched.
 ### 4.4. Config consistency
 
 4.3 and 4.6 each move divergent options into the shared set: `watch-applications`,
-`juju-api-user` and `juju-api-password` from 4.3, `diagnostics` from 4.6.
+`juju-api-user` and `juju-api-password` from 4.3, `diagnostics` from 4.6
+(same name, substrate-specific format).
 
 Assert consistency over the *intersection* of the two charms' options, not a
 hardcoded key list. A key moving into the shared set is then covered
@@ -434,19 +435,19 @@ Part of this change, not separate tasks: update the two context-collection lists
 in `ARCHITECTURE.md`, and correct the `max-context-lines` description to say it
 is a per-item cap tightened per section, not a report total.
 
-### 4.6. Kubernetes diagnostics plan parity
+### 4.6. Kubernetes diagnostics plan
 
-The machine charm generates an AI diagnostics plan on `principal-relation-joined`
-and passes it to its collector. The k8s charm does neither: `collect_context`
-in `charms/k8s/src/jaime/collector.py` accepts a `diagnostics_plan` argument and
-ignores it, and `charms/k8s/config.yaml` has no `diagnostics` option at all. So
-k8s pod collection is a fixed set with no plan-driven extensibility. Promoted
-from the `ARCHITECTURE.md` ideas list because it gates the CharmHub release.
+The k8s charm takes no diagnostics plan: `collect_context` ignores its
+`diagnostics_plan` argument and `charms/k8s/config.yaml` has no `diagnostics`
+option. Full parity with the machine plan is not achievable without exec into
+workload containers, so this is scoped to an operator-supplied, k8s-specific
+plan (container selection, log patterns, env names, ports). AI plan generation
+is deferred. Gates the CharmHub release.
 
-- [ ] [charm] Add a `diagnostics` config option to `charms/k8s/config.yaml`
-- [ ] [charm] Generate a diagnostics plan for watched applications and persist it
-- [ ] [python] Pass the plan into the k8s `collect_context` and honour it
-- [ ] [test] Cover plan-driven k8s collection, matching the machine charm's tests
+Specified in `specs/261006-change-k8s-diagnostics-plan/`: proposal, design,
+requirements and the task checklist.
+
+- [ ] Agree the change, then implement per its `tasks.md`
 
 ### 4.7. Monitoring transparency
 
