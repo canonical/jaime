@@ -18,7 +18,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -51,7 +51,7 @@ jobs:
             dir: charms/k8s
             path: tests/
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -76,7 +76,7 @@ jobs:
     # runs once linting and every unit suite are green.
     needs: [lint, unit]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
@@ -120,7 +120,7 @@ jobs:
     timeout-minutes: 90
     needs: [pack]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
