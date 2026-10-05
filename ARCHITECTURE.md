@@ -107,6 +107,15 @@ into both charm suites.
 
 `jaime` is currently a **namespace package** — there is no `__init__.py` in either `jaime-package/jaime/` or `charms/*/src/jaime/`, so Python merges both directories into one `jaime` namespace at runtime. `from jaime.incident import Incident` resolves from the shared code and `from jaime.collector import collect_context` resolves from the charm-local module. At pack time the shared code is copied into the charm directory, because charmcraft's managed build container cannot follow a symlink out of the charm root.
 
+Both charms build for Ubuntu 22.04, 24.04 and 26.04 on both amd64 and arm64,
+declared as multi-base platforms in each charm's `charmcraft.yaml`. They pack
+with the **uv plugin** (not the older `charm` plugin, which is unavailable on
+the 26.04 base); the plugin reads each charm's `pyproject.toml` dependencies
+and a committed `uv.lock`, and builds a per-base virtual environment. The
+build host can still only produce the architecture it runs on — an amd64
+runner packs the three amd64 artifacts, and the arm64 artifacts require an
+arm64 or cross-build host.
+
 ## Technology Choices
 
 ### Juju Charm Framework

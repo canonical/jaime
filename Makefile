@@ -9,6 +9,13 @@ MACHINE_DIR   = charms/machine
 K8S_DIR       = charms/k8s
 VENDOR_NAME   = _jaime-package
 
+# Base and architecture the deploy targets pack for. The charms build for
+# 22.04, 24.04 and 26.04 on both amd64 and arm64; pick one artifact here.
+JAIME_BASE   ?= ubuntu-24.04
+JAIME_ARCH   ?= amd64
+MACHINE_CHARM = jaime_$(JAIME_BASE)-$(JAIME_ARCH).charm
+K8S_CHARM     = jaime-k8s_$(JAIME_BASE)-$(JAIME_ARCH).charm
+
 # Principal application the machine subordinate relates to.
 PRINCIPAL_CHARM ?= $(JAIME_PRINCIPAL_CHARM)
 
@@ -32,7 +39,13 @@ help:
 	@echo "  make clean         - Remove build scratch and packed artifacts"
 	@echo "  make distclean     - clean, plus remove .venv/ and .tox/"
 	@echo "  make deploy        - Pack and deploy the machine charm (needs PRINCIPAL_CHARM)"
+	@echo "  make deploy-k8s    - Pack and deploy the k8s charm"
 	@echo "  make remove        - Remove the machine charm from the current model"
+	@echo "  make remove-k8s    - Remove the k8s charm from the current model"
+	@echo ""
+	@echo "Both charms are built for ubuntu 22.04, 24.04 and 26.04 on amd64 and"
+	@echo "arm64. Deploy defaults to 24.04/amd64; override with JAIME_BASE and"
+	@echo "JAIME_ARCH (e.g. make deploy JAIME_BASE=ubuntu-26.04)."
 
 # ---------------------------------------------------------------------------
 # Test and lint
@@ -139,7 +152,7 @@ check-principal:
 
 deploy: check-principal pack-machine
 	@echo "Deploying machine charm alongside $(PRINCIPAL_CHARM)..."
-	juju deploy ./$(DIST_DIR)/jaime_ubuntu-24.04-amd64.charm --force \
+	juju deploy ./$(DIST_DIR)/$(MACHINE_CHARM) --force \
 		--config provider="$(JAIME_PROVIDER)" \
 		--config model="$(JAIME_MODEL)" \
 		--config api-token="$(JAIME_API_TOKEN)" \
@@ -151,7 +164,7 @@ deploy-k8s: pack-k8s
 	@echo "Deploying k8s charm..."
 	@echo "NOTE: the application must be named jaime-k8s; the RoleBinding in"
 	@echo "      $(K8S_DIR)/jaime-k8s-rbac.yaml is bound to that ServiceAccount."
-	juju deploy ./$(DIST_DIR)/jaime-k8s_ubuntu-24.04-amd64.charm jaime-k8s --trust \
+	juju deploy ./$(DIST_DIR)/$(K8S_CHARM) jaime-k8s --trust \
 		--config provider="$(JAIME_PROVIDER)" \
 		--config model="$(JAIME_MODEL)" \
 		--config api-token="$(JAIME_API_TOKEN)" \
