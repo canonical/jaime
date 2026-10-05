@@ -1,7 +1,7 @@
 # Jaime Tasks
 
-Phases 0 to 3.5 are implemented. Phases 4 to 6 are the active plan; Phase 7 is
-tracked but deferred.
+Phases 0 to 3.5 are implemented. Phases 4 and 5 are the active plan; Phases 6
+to 8 are deferred.
 
 Later phases and unscoped ideas still live in `ARCHITECTURE.md`, which is the
 roadmap source of truth.
@@ -9,9 +9,9 @@ roadmap source of truth.
 Ordering note: 5.1 (CI) runs ahead of Phase 4 because it is cheap and guards
 every change after it. 5.2 depends on 4.1, since integration tests cannot
 deploy reliably until packaging stops destroying artifacts. 5.3 depends on
-4.2, 4.4 and 4.6. 4.11 (documentation) runs last, after incident history, the
-prompt budget and redaction, so `docs/actions.md` and the acceptance tests
-describe the shipped surface rather than a stale one.
+4.2, 4.4 and 4.6. 4.10 (documentation) runs last in Phase 4, before the 0.1.0
+release, so `docs/actions.md` and the acceptance tests describe the shipped
+surface rather than a stale one.
 
 ## 0. Phase 0 — Repository bootstrap
 
@@ -90,8 +90,6 @@ Only logic for `observe` mode is added at this phase.
 - [x] [python] Collect disk usage via `df -h`
 - [x] [python] Collect memory summary via `free -h`
 - [x] [python] Enforce `max-context-lines` on all log/collect output
-- [ ] [python] Collect journal snippets bounded by time/lines
-- [ ] [python] Redact obvious secrets/tokens/passwords
 
 ### 1.6a. Plan-driven context collection
 
@@ -112,8 +110,6 @@ Only logic for `observe` mode is added at this phase.
 - [x] [python] Write `context-collected` event with log line count
 - [x] [python] Write `report-generated` event with report path
 - [x] [python] Emit lifecycle events to the Juju debug log (`incident-opened`, `incident-closed`, `principal-status-watched`, `principal-status-cooldown`, `principal-status-recovered`)
-- [ ] [python] Write `still-unhealthy` event to the audit log during timeout wait (debug log only today)
-- [ ] [python] Write `incident-recovered` event to the audit log on recovery (debug log only today)
 - [x] [python] Include timestamp, incident ID, principal unit, status in all events
 
 ### 1.8. Reports
@@ -124,7 +120,6 @@ Only logic for `observe` mode is added at this phase.
 - [x] [python] Include bounded Juju unit log excerpts
 - [x] [python] Include host checks (disk, memory, systemd)
 - [x] [python] Include plan-driven sections (log files, processes, systemd units, network ports, env vars)
-- [ ] [python] Include suggested manual next steps
 - [x] [python] Store reports under `/var/log/jaime/reports/`
 
 ### 1.9. Actions
@@ -154,7 +149,6 @@ Only logic for `observe` mode is added at this phase.
 - [x] [test] Unit test report generation — background sections
 - [x] [test] Unit test report generation — plan-driven sections
 - [x] [test] Unit test `write_event` audit logging
-- [ ] [test] Add fake provider for AI tests
 
 ### 1.11. Optimize data gathering and LLM context
 
@@ -355,7 +349,7 @@ applications. `*` adds every co-located unit. The principal is always watched.
 - [x] [charm] Exclude Jaime's own unit, using the existing `exclude_applications` argument
 - [x] [charm] Strengthen the comment on the `own_principal_units` filter in `_log_principal_status`. `goal-state` returns identical content under both endpoints, so the filter is what stops a co-located subordinate being processed as a principal unit
 - [x] [charm] Always watch the principal, whatever `watch-applications` is set to
-- [x] [charm] Detect other Jaime units on the same machine and report it in the unit status. Two Jaime units on one host would open duplicate incidents. Deduplication needs the peer relation and is deferred to 6.1
+- [x] [charm] Detect other Jaime units on the same machine and report it in the unit status. Two Jaime units on one host would open duplicate incidents. Deduplication needs the peer relation and is deferred to 7.1
 - [x] [charm] Block when credentials are missing or rejected, mirroring the k8s prerequisite check from 4.2
 - [x] [test] Add a machine-model `FullStatus` fixture with machines and nested subordinates. The existing `_FULL_STATUS` is Kubernetes-shaped and exercises neither
 - [x] [test] Cover the credential-free default, name filtering, `*`, self-exclusion and host filtering
@@ -381,7 +375,7 @@ is safe to do at any point.
 
 Collect more evidence into the report and bound every collected item in time,
 lines or bytes. The report is the persisted evidence artifact; optimising it for
-the model is 4.9's job, not this one. The per-source treatment — safety cap for
+the model is 6.1's job, not this one. The per-source treatment — safety cap for
 the report, tier for the prompt — is the table in `ARCHITECTURE.md` under
 "Context evidence and prompt projection", which is the single source of truth
 for both tasks.
@@ -392,7 +386,7 @@ the high-volume or secret-bearing sources:
 
 - unit and container logs: error/warning filter plus de-duplication
 - environment variables: names and set/unset only, never values
-- secret-bearing config values: redacted before the report is written (4.10)
+- secret-bearing config values: redacted before the report is written (4.9)
 
 - [x] [python] Machine: collect snap status (`snap list`, `snap services`) and
       treat only a service in the `failed` state as a fault. `disabled`
@@ -493,7 +487,7 @@ that are no longer monitored, because the tracker never forgets an observation.
 last incident per unit until a new watched episode clears it, so an operator
 cannot query past incidents. Reports and `events.jsonl` survive hook and unit
 restarts on the machine substrate, but are pod-local on Kubernetes and lost on
-pod replacement (see the Phase 6 durability idea), so this is machine-durable
+pod replacement (see the Kubernetes state durability idea), so this is machine-durable
 and k8s-best-effort until that lands.
 
 Prerequisite: `incident-closed` is written to the debug log only, not to
@@ -506,56 +500,13 @@ Future actions in `ARCHITECTURE.md`.
 - [x] [charm] Add a `list-incidents` action reading `events.jsonl`, correlating `incident-start` / `report-generated` / `incident-closed` by incident id, with an optional `unit` filter and JSON output; tolerate a missing or malformed log
 - [x] [charm] Register `list-incidents` in both charms and both `actions.yaml`
 - [x] [test] Cover open and closed incidents, report-path correlation, the `unit` filter, and an empty or malformed audit log
-- [x] [docs] Update `docs/actions.md` (coordinate with 4.11) and the `ARCHITECTURE.md` descriptive sections once the code lands
+- [x] [docs] Update `docs/actions.md` (coordinate with 4.10) and the `ARCHITECTURE.md` descriptive sections once the code lands
 
 Known limitation: incidents logged before this change have no `incident-closed`
 row and will be reported as open. Only the most recent incident per unit is
 recoverable from `status-state.json`.
 
-### 4.9. Prompt budget and compaction
-
-4.5 collects and bounds the evidence; this task optimises the prompt. The
-provider receives a bounded, relevance-ranked projection of the stored report,
-while the report remains the full persisted evidence artifact. The per-source
-treatment and the tier model are the table in `ARCHITECTURE.md` under "Context
-evidence and prompt projection".
-
-Tier model:
-
-- Tier 1 — always included, individually bounded: header/status, executive
-  summary, filtered unit logs, failure indicators when present (failed systemd
-  units, failed snap logs, k8s Warning events), pod/container summary and the
-  current and last container states
-- Tier 2 — included while the budget allows: processes, network ports, plan log
-  files, k8s resource usage and previous-container logs, snap status and
-  services, health-command output (once the health-command allowlist lands; see
-  7.1)
-- Tier 3 — digest only, never raw: disk, memory, `ss` connections, firewall
-  rules, full charm and Juju config dumps
-
-- [ ] [project] Revise the descriptive `ARCHITECTURE.md` statements when the
-      projection lands: "there is no separate raw context bundle" and "the AI is
-      given the stored report". The design is already recorded under "Context
-      evidence and prompt projection"
-- [ ] [python] Build the projection as a pure function of the stored report, a
-      budget and a projection version, so it is reproducible without persisting a
-      second artifact. This requires the report to keep stable section headings
-- [ ] [python] Keep pod events structured (type, reason, count, lastTimestamp)
-      rather than pre-formatted strings, so the projection can keep Warning and
-      count Normal. Structuring belongs here because the projection is its first
-      consumer
-- [ ] [python] Add a global prompt budget (`max-prompt-bytes` or an estimated
-      token count): Tier 1 always fits, Tier 2 until exhausted, Tier 3 reduced to
-      digests, with explicit "… N lines omitted …" markers
-- [ ] [python] De-duplicate across sections: the summary repeats error lines that
-      also appear in "Recent unit logs", and changed config appears twice
-- [ ] [python] Record the projection size and version in the
-      `suggestion-generated` audit event, so the AI interaction stays auditable
-- [ ] [test] Cover under and over budget, Tier 1 never truncated, and identical
-      output for a fixed report and budget
-- [ ] [docs] Document the budget option and the tier model
-
-### 4.10. Redact secrets from reports and prompts
+### 4.9. Redact secrets from reports and prompts
 
 There is no redaction anywhere. The Kubernetes report renders every config
 option value of the watched application (`report.py`), and unit logs can carry
@@ -570,11 +521,13 @@ more evidence (4.5) makes this worse, so redaction is a prerequisite for it.
       deleting evidence, so a reader knows something was removed
 - [ ] [python] Never render secret-typed config values at all; keep only
       set/unset for them
+- [ ] [python] Redact obvious secrets, tokens and passwords from collected logs
+      and config, absorbing the Phase 1 item
 - [ ] [test] A planted token in a log line and in a config value never appears in
       the report, the prompt or the audit log
 - [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
 
-### 4.11. Documentation accuracy
+### 4.10. Documentation accuracy
 
 The acceptance tests in `ARCHITECTURE.md` and the reference pages under `docs/`
 have drifted from the shipped charms. Nothing links to `docs/` from any other
@@ -602,9 +555,7 @@ file, which is why it rots unnoticed.
 - [x] [test] Cover missing Kubernetes RBAC and rejected controller credentials
 - [x] [test] Assert the API token never reaches reports or the audit log
 - [x] [test] Assert the non-AI fallback still produces a report
-- [ ] [test] Run the integration suite against a real controller and fix what the first run surfaces
-- [ ] [test] Add the k8s integration job to CI once a MicroK8s runner is available
-- [ ] [test] Cover a realistic principal such as `postgresql 16/stable`, which is on ubuntu@24.04. The suite currently uses `any-charm` with `status-set`, which is deterministic but exercises no real workload, so Jaime's host collectors are never run against a genuine service.
+- [x] [test] Run the integration suite against a real controller and fix what the first run surfaces
 
 ### 5.3. Release
 
@@ -613,11 +564,83 @@ Gated on 4.2, 4.4 and 4.6.
 - [ ] [project] Publish both charms to CharmHub with tracks and channels
 - [x] [docs] Per-charm CharmHub page content
 
-## 6. Phase 6 — Clustered operation for machine charms
+## 6. Phase 6 — Deferred and follow-up work
+
+Consciously not part of the 0.1.0 release. Tracked so the work is not lost.
+
+### 6.1. Prompt budget and compaction
+
+4.5 collects and bounds the evidence; this task optimises the prompt. The
+provider receives a bounded, relevance-ranked projection of the stored report,
+while the report remains the full persisted evidence artifact. The per-source
+treatment and the tier model are the table in `ARCHITECTURE.md` under "Context
+evidence and prompt projection".
+
+Tier model:
+
+- Tier 1 — always included, individually bounded: header/status, executive
+  summary, filtered unit logs, failure indicators when present (failed systemd
+  units, failed snap logs, k8s Warning events), pod/container summary and the
+  current and last container states
+- Tier 2 — included while the budget allows: processes, network ports, plan log
+  files, k8s resource usage and previous-container logs, snap status and
+  services, health-command output (once the health-command allowlist lands; see
+  8.1)
+- Tier 3 — digest only, never raw: disk, memory, `ss` connections, firewall
+  rules, full charm and Juju config dumps
+
+- [ ] [project] Revise the descriptive `ARCHITECTURE.md` statements when the
+      projection lands: "there is no separate raw context bundle" and "the AI is
+      given the stored report". The design is already recorded under "Context
+      evidence and prompt projection"
+- [ ] [python] Build the projection as a pure function of the stored report, a
+      budget and a projection version, so it is reproducible without persisting a
+      second artifact. This requires the report to keep stable section headings
+- [ ] [python] Keep pod events structured (type, reason, count, lastTimestamp)
+      rather than pre-formatted strings, so the projection can keep Warning and
+      count Normal. Structuring belongs here because the projection is its first
+      consumer
+- [ ] [python] Add a global prompt budget (`max-prompt-bytes` or an estimated
+      token count): Tier 1 always fits, Tier 2 until exhausted, Tier 3 reduced to
+      digests, with explicit "… N lines omitted …" markers
+- [ ] [python] De-duplicate across sections: the summary repeats error lines that
+      also appear in "Recent unit logs", and changed config appears twice
+- [ ] [python] Record the projection size and version in the
+      `suggestion-generated` audit event, so the AI interaction stays auditable
+- [ ] [test] Cover under and over budget, Tier 1 never truncated, and identical
+      output for a fixed report and budget
+- [ ] [docs] Document the budget option and the tier model
+
+### 6.2. Kubernetes integration job in CI
+
+- [ ] [test] Add the k8s integration job to CI once a MicroK8s runner is available
+
+### 6.3. Release automation and release follow-ups
+
+The release process is designed in `RELEASING.md` on the
+`planning/release-procedure` branch. The 0.1.0 release is published manually;
+this task automates subsequent releases.
+
+- [ ] [project] Merge the release plan and add `.github/workflows/release.yml` on `v*` tags: validate the tag against `CHANGELOG.md` and both `charmcraft.yaml` versions, run the unit suites, pack both charms, upload with `--release ${TRACK}/edge --release latest/edge`, and create the GitHub Release from the matching CHANGELOG section
+- [ ] [project] Add the first-release fallback: when the versioned track does not exist, publish `latest/edge` only and leave the versioned pointer to a later step
+- [ ] [project] Add `.github/workflows/promote.yml` to move a revision along `X.Y/edge` to `X.Y/beta` to `X.Y/stable` on manual dispatch
+- [ ] [project] Register `jaime-k8s` on CharmHub, request the `MAJOR.MINOR` track guardrail, and create the `CHARMCRAFT_AUTH` store credential
+- [ ] [test] Dry-run the release workflow through `workflow_dispatch` before the first automated tag
+- [ ] [test] Cover a realistic principal such as `postgresql 16/stable`, which is on ubuntu@24.04. The suite currently uses `any-charm` with `status-set`, which is deterministic but exercises no real workload, so Jaime's host collectors are never run against a genuine service
+
+### 6.4. Phase 1 leftovers
+
+- [ ] [python] Collect journal snippets bounded by time/lines
+- [ ] [python] Write `still-unhealthy` event to the audit log during timeout wait (debug log only today)
+- [ ] [python] Write `incident-recovered` event to the audit log on recovery (debug log only today)
+- [ ] [python] Include suggested manual next steps
+- [ ] [test] Add fake provider for AI tests
+
+## 7. Phase 7 — Clustered operation for machine charms
 
 Today a subordinate Jaime unit runs per principal unit, so a multi-unit application produces one independent incident, one LLM call and one report per unit, with no view of the cluster.
 
-### 6.1. Leader aggregation
+### 7.1. Leader aggregation
 
 - [ ] [charm] Add a peer relation to the machine subordinate
 - [ ] [charm] Followers publish compacted local context; the leader aggregates it
@@ -629,12 +652,12 @@ Today a subordinate Jaime unit runs per principal unit, so a multi-unit applicat
 - [ ] [python] Define the aggregation window across independent `update-status` cadences
 - [ ] [python] Keep unit-level detection; add cluster-level aggregation on top
 
-## 7. Phase 7 — Assisted remediation
+## 8. Phase 8 — Assisted remediation
 
 Deferred: not part of the 0.1.0 release. The design is in `ARCHITECTURE.md`;
 the tasks are tracked here so the gap is not lost.
 
-### 7.1. Diagnostics health-command allowlist
+### 8.1. Diagnostics health-command allowlist
 
 `build_prompt` asks the provider for "health commands", `validate_diagnostics`
 checks only their structure, and `_collect_health_commands` executes them. That
