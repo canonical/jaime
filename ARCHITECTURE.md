@@ -705,12 +705,26 @@ Written to `events.jsonl`, one JSON object per line, each with a timestamp,
 incident ID, and unit name:
 
 ```text
-incident-start          incident opened
+incident-start          incident opened, with the workload status message
+incident-closed         incident closed by recovery or manual reset
 context-collected       context collected, with log line count (machine only)
 report-generated        Markdown report written, with report path
 suggestion-generated    AI suggestion attached, with usage metadata
 act-command-executed    reserved for act mode, not reachable today
 ```
+
+`incident-closed` is written when a unit recovers and again on a `reset`
+action, so closure and duration are part of the durable trail. A `reset`
+first appends a closure row for **every** incident still open in the audit
+log, not only the tracker's current one — `events.jsonl` is append-only and
+remembers incidents that `status-state.json` has already forgotten, so
+without the backfill those rows would be reported as open by
+`list-incidents` forever. It then **rotates** the log: the closed history is
+moved to `events.jsonl.<timestamp>` and the configured path restarts empty,
+so a subsequent `list-incidents` sees no residual incidents while the
+archived trail is retained for forensics. Incidents old enough to predate
+the closure event have no `incident-closed` row and are reported as open
+until the next `reset`.
 
 A second, more verbose set of lifecycle events is emitted as JSON to the Juju
 debug log only, and is **not** part of the durable audit trail:
@@ -720,11 +734,7 @@ principal-status-watched      unit entered a watched status
 principal-status-cooldown     report suppressed by cooldown-minutes
 principal-status-recovered    unit left the watched statuses
 incident-opened               incident created, full incident record
-incident-closed               incident closed by recovery or manual reset
 ```
-
-Recovery is therefore visible in `juju debug-log` but does not currently append
-a line to `events.jsonl`.
 
 ## Config
 
@@ -786,6 +796,7 @@ generate-report
 get-suggestion [additional-context]
 show-status
 show-usage [incident-id]
+list-incidents [unit]
 reset
 ```
 
@@ -796,17 +807,20 @@ generate-report
 get-suggestion [additional-context]
 show-status
 show-usage [incident-id]
+list-incidents [unit]
 reset
 ```
 
 `diagnose` and `collect-context` are machine-only. All actions are read-only
-with respect to the monitored workload.
+with respect to the monitored workload. `list-incidents` reads the audit log
+and correlates each incident's start, report and closure events, including
+the workload status message captured when the incident opened; incidents
+with no `incident-closed` row are reported as open.
 
 Future actions:
 
 ```text
 remediate
-list-incidents
 show-incident
 clear-incident
 ```

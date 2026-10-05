@@ -57,8 +57,9 @@ juju run jaime/0 collect-context       # Collect and return context bundle
 juju run jaime/0 generate-report       # Generate report for current open incident
 juju run jaime/0 get-suggestion        # Get AI suggestion for current incident
 juju run jaime/0 show-status           # Show monitoring state for all units
-juju run jaime/0 reset                 # Clear all incidents and start fresh
 juju run jaime/0 show-usage            # Show LLM API usage (tokens, cost) per model
+juju run jaime/0 list-incidents        # List incidents from the audit log, newest first
+juju run jaime/0 reset                 # Clear all incidents and start fresh
 ```
 
 ## Modes

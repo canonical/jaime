@@ -28,6 +28,17 @@ show-usage:
       type: string
       default: ""
       description: "Incident ID to filter by. If empty, returns the global summary."
+list-incidents:
+  description: "List incidents recorded in the audit log, newest first. Each entry correlates incident-start, report-generated and incident-closed events by incident id, including open incidents. Optionally filter by unit."
+  params:
+    unit:
+      type: string
+      default: ""
+      description: "Restrict the result to incidents for one unit (e.g. postgresql/0). Empty returns all incidents."
+  results:
+    result:
+      type: string
+      description: "JSON array of incident records, newest first: incident_id, unit, workload, status_message, first_seen, status_since, opened_at, report_path, closed_at, status."
 reset:
   description: "Clear all tracked incidents and status state. Use to start fresh after a resolved incident."
   params: {}

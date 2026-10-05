@@ -9,6 +9,7 @@ from ops.testing import Harness
 
 from jaime.core import CoreMixin, Mode, Provider, summarise_usage
 from jaime.incident import Incident
+from jaime.logging import list_incidents
 from jaime.principal import StatusTracker
 
 
@@ -343,3 +344,158 @@ class TestShowStatusFilter:
             h.charm._on_action_show_status(event)
         records = json.loads(event.set_results.call_args[0][0]["result"])
         assert records[0]["status-message"] == ""
+
+
+class TestListIncidentsAction:
+    def _write_events(self, path, *events):
+        from jaime.logging import write_event
+        for e in events:
+            write_event(e, str(path))
+
+    def test_returns_incidents_and_unit_filter(self, tmp_path):
+        events = str(tmp_path / "events.jsonl")
+        self._write_events(
+            events,
+            {"event": "incident-start", "unit": "a/0", "incident_id": "i1",
+             "status_message": "blocked: no leader", "timestamp": "2026-07-13T00:00:00+00:00"},
+            {"event": "incident-start", "unit": "b/0", "incident_id": "i2",
+             "timestamp": "2026-07-14T00:00:00+00:00"},
+        )
+        h = _make_harness({"audit-log-path": events})
+        event = mock.MagicMock()
+        event.params = {}
+        h.charm._on_action_list_incidents(event)
+        records = json.loads(event.set_results.call_args[0][0]["result"])
+        assert [r["incident_id"] for r in records] == ["i2", "i1"]
+        by_id = {r["incident_id"]: r for r in records}
+        assert by_id["i1"]["status_message"] == "blocked: no leader"
+        assert by_id["i2"]["status_message"] == ""
+
+        event2 = mock.MagicMock()
+        event2.params = {"unit": "a/0"}
+        h.charm._on_action_list_incidents(event2)
+        records2 = json.loads(event2.set_results.call_args[0][0]["result"])
+        assert [r["incident_id"] for r in records2] == ["i1"]
+
+    def test_missing_log_returns_empty(self, tmp_path):
+        h = _make_harness({"audit-log-path": str(tmp_path / "missing.jsonl")})
+        event = mock.MagicMock()
+        event.params = {}
+        h.charm._on_action_list_incidents(event)
+        records = json.loads(event.set_results.call_args[0][0]["result"])
+        assert records == []
+
+
+class TestIncidentClosedAudit:
+    """incident-closed must be durably written to events.jsonl."""
+
+    def _archives(self, tmp_path):
+        return sorted(tmp_path.glob("events.jsonl.*"))
+
+    def test_reset_writes_incident_closed(self, tmp_path):
+        from jaime.incident import Incident
+        h = _make_harness({"audit-log-path": str(tmp_path / "events.jsonl")})
+        inc = Incident.open()
+        h.charm._status_tracker._state["postgresql/0"] = {
+            "status": "blocked", "since": "2026-01-01T00:00:00+00:00",
+            "increment": 3, "incident": inc.to_dict(),
+            "last_reported": "2026-01-01T00:01:00+00:00",
+        }
+        event = mock.MagicMock()
+        event.params = {}
+        h.charm._on_action_reset(event)
+        import json as _json
+        # The closure row lands in the rotated archive; the main log is fresh.
+        archives = self._archives(tmp_path)
+        assert len(archives) == 1
+        closed = [_json.loads(line) for line in archives[0].read_text().splitlines()]
+        assert len(closed) == 1
+        assert closed[0]["event"] == "incident-closed"
+        assert closed[0]["incident_id"] == inc.id
+        assert closed[0]["closed_at"] is not None
+        assert closed[0]["reason"] == "manual reset"
+
+    def test_reset_rotates_audit_log(self, tmp_path):
+        from jaime.logging import write_event
+        audit = str(tmp_path / "events.jsonl")
+        write_event({"event": "incident-start", "unit": "a/0", "incident_id": "i1",
+                     "timestamp": "2026-10-04T20:09:03+00:00"}, audit)
+        h = _make_harness({"audit-log-path": audit})
+        event = mock.MagicMock()
+        event.params = {}
+        h.charm._on_action_reset(event)
+        # Main log exists (fresh/empty); history is in the archive.
+        assert tmp_path.joinpath("events.jsonl").exists()
+        assert list_incidents(audit) == []
+        archives = self._archives(tmp_path)
+        assert len(archives) == 1
+
+    def test_recovery_writes_incident_closed(self, tmp_path):
+        from jaime.incident import Incident
+        h = _make_harness({"audit-log-path": str(tmp_path / "events.jsonl")})
+        inc = Incident.open()
+        h.charm._status_tracker._state["postgresql/0"] = {
+            "status": "blocked", "since": "2026-01-01T00:00:00+00:00",
+            "unhealthy_since": "2026-01-01T00:00:00+00:00",
+            "increment": 1, "incident": inc.to_dict(),
+        }
+        # Healthy status (not in watch-statuses) triggers the recovery branch.
+        h.charm._process_unit("postgresql/0", "active", "2026-01-01T00:02:00+00:00")
+        import json as _json
+        lines = open(tmp_path / "events.jsonl").read().splitlines()
+        closed = [_json.loads(line) for line in lines]
+        assert len(closed) == 1
+        assert closed[0]["event"] == "incident-closed"
+        assert closed[0]["incident_id"] == inc.id
+        assert closed[0]["closed_at"] is not None
+        assert "reason" not in closed[0]
+        # Recovery does not rotate.
+        assert not (tmp_path / "events.jsonl.0").exists() and not self._archives(tmp_path)
+
+    def test_reset_closes_audit_incidents_not_in_tracker(self, tmp_path):
+        """Reset must close incidents that only survive in the audit log."""
+        from jaime.logging import write_event
+        audit = str(tmp_path / "events.jsonl")
+        write_event({
+            "event": "incident-start", "unit": "mysql/0", "incident_id": "old-id",
+            "timestamp": "2026-10-04T20:09:03+00:00",
+        }, audit)
+        h = _make_harness({"audit-log-path": audit})
+        event = mock.MagicMock()
+        event.params = {}
+        h.charm._on_action_reset(event)
+        import json as _json
+        archives = self._archives(tmp_path)
+        assert len(archives) == 1
+        closed = [_json.loads(line) for line in archives[0].read_text().splitlines()
+                  if _json.loads(line)["event"] == "incident-closed"]
+        assert len(closed) == 1
+        assert closed[0]["incident_id"] == "old-id"
+        assert closed[0]["unit"] == "mysql/0"
+        assert closed[0]["closed_at"] is not None
+
+    def test_reset_writes_single_closure_row_per_incident(self, tmp_path):
+        """A tracked incident that is also in the audit log gets one row only."""
+        from jaime.incident import Incident
+        from jaime.logging import write_event
+        audit = str(tmp_path / "events.jsonl")
+        inc = Incident.open()
+        write_event({
+            "event": "incident-start", "unit": "postgresql/0",
+            "incident_id": inc.id, "timestamp": "2026-01-01T00:00:00+00:00",
+        }, audit)
+        h = _make_harness({"audit-log-path": audit})
+        h.charm._status_tracker._state["postgresql/0"] = {
+            "status": "blocked", "since": "2026-01-01T00:00:00+00:00",
+            "increment": 3, "incident": inc.to_dict(),
+        }
+        event = mock.MagicMock()
+        event.params = {}
+        h.charm._on_action_reset(event)
+        import json as _json
+        archives = self._archives(tmp_path)
+        assert len(archives) == 1
+        closed = [_json.loads(line) for line in archives[0].read_text().splitlines()
+                  if _json.loads(line)["event"] == "incident-closed"]
+        assert len(closed) == 1
+        assert closed[0]["incident_id"] == inc.id

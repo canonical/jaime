@@ -501,12 +501,12 @@ Prerequisite: `incident-closed` is written to the debug log only, not to
 `list-incidents` needs that first. `list-incidents` is already listed under
 Future actions in `ARCHITECTURE.md`.
 
-- [ ] [project] Record the decision in `ARCHITECTURE.md`: write `incident-closed` to `events.jsonl` on recovery and on `reset`, and promote `list-incidents` from Future actions into both charms' action lists. Update the descriptive Audit-events list when the code lands
-- [ ] [charm] Write `incident-closed` to `events.jsonl` in `_process_unit` recovery and in `_on_action_reset`, alongside the existing debug events
-- [ ] [charm] Add a `list-incidents` action reading `events.jsonl`, correlating `incident-start` / `report-generated` / `incident-closed` by incident id, with an optional `unit` filter and JSON output; tolerate a missing or malformed log
-- [ ] [charm] Register `list-incidents` in both charms and both `actions.yaml`
-- [ ] [test] Cover open and closed incidents, report-path correlation, the `unit` filter, and an empty or malformed audit log
-- [ ] [docs] Update `docs/actions.md` (coordinate with 4.11) and the `ARCHITECTURE.md` descriptive sections once the code lands
+- [x] [project] Record the decision in `ARCHITECTURE.md`: write `incident-closed` to `events.jsonl` on recovery and on `reset`, and promote `list-incidents` from Future actions into both charms' action lists. Update the descriptive Audit-events list when the code lands
+- [x] [charm] Write `incident-closed` to `events.jsonl` in `_process_unit` recovery and in `_on_action_reset`, alongside the existing debug events
+- [x] [charm] Add a `list-incidents` action reading `events.jsonl`, correlating `incident-start` / `report-generated` / `incident-closed` by incident id, with an optional `unit` filter and JSON output; tolerate a missing or malformed log
+- [x] [charm] Register `list-incidents` in both charms and both `actions.yaml`
+- [x] [test] Cover open and closed incidents, report-path correlation, the `unit` filter, and an empty or malformed audit log
+- [x] [docs] Update `docs/actions.md` (coordinate with 4.11) and the `ARCHITECTURE.md` descriptive sections once the code lands
 
 Known limitation: incidents logged before this change have no `incident-closed`
 row and will be reported as open. Only the most recent incident per unit is

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Features
+
+- Add a `list-incidents` action to both charms, reading `events.jsonl` and correlating each incident's `incident-start`, `report-generated` and `incident-closed` events by incident id (with an optional `unit` filter). `incident-closed` is now durably written to the audit log on recovery and on `reset`, so closure and duration survive in the incident history; previously only open/current incidents were recoverable. Incidents that predate the closure event are reported as open, a missing or malformed log yields an empty list, and `reset` appends a closure row for every incident still open in the audit log (not only the current tracked one), then **rotates** the log: the closed history is archived to `events.jsonl.<timestamp>` and the configured path restarts empty, so `list-incidents` shows no residual history while the audit trail is kept for forensics
+- Persist the workload status message ("reason") on the incident itself at open time, and carry it in the `incident-start` audit event. `list-incidents` records therefore show why each incident opened, and `generate-report` can reproduce the original reason rather than the latest observed one
+
 ### Changes
 
 - List the principal charm's project links from its `metadata.yaml` (docs, website, source, issues) as `## Charm links` in the report, and instruct the suggest prompt to base remediation on those official sources and never invent a URL or procedure. Combined with the `## Available actions` section, the model now has the workload's official documentation and its actual action set instead of guessing. The k8s charm has no equivalent: a pod cannot read sibling applications' charm directories, so it keeps the Juju-config and pod evidence only

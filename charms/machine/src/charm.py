@@ -57,6 +57,7 @@ class JaimeCharm(CoreMixin, CharmBase):
         self.framework.observe(self.on.get_suggestion_action, self._on_action_get_suggestion)
         self.framework.observe(self.on.show_status_action, self._on_action_show_status)
         self.framework.observe(self.on.show_usage_action, self._on_action_show_usage)
+        self.framework.observe(self.on.list_incidents_action, self._on_action_list_incidents)
         self.framework.observe(self.on.reset_action, self._on_action_reset)
 
     # ------------------------------------------------------------------

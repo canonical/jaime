@@ -97,6 +97,40 @@ class TestIncidentSerialisation:
         inc = Incident.from_dict(d)
         assert inc.id == d["id"]
         assert inc.closed_at is None
+        assert inc.status_message == ""
+
+
+class TestIncidentStatusMessage:
+    def test_open_accepts_message(self):
+        inc = Incident.open(status_message="Please initialize OpenBao")
+        assert inc.status_message == "Please initialize OpenBao"
+
+    def test_open_defaults_to_empty(self):
+        assert Incident.open().status_message == ""
+
+    def test_message_survives_close(self):
+        inc = Incident.open(status_message="disk full")
+        closed = inc.close()
+        assert closed.status_message == "disk full"
+
+    def test_message_roundtrips_through_dict(self):
+        inc = Incident.open(status_message="Please initialize OpenBao or integrate with an auto-unseal provider")
+        restored = Incident.from_dict(inc.to_dict())
+        assert restored.status_message == inc.status_message
+
+    def test_empty_message_omitted_from_dict(self):
+        d = Incident.open(status_message="").to_dict()
+        assert "status_message" not in d
+
+    def test_old_state_without_message_loads_as_empty(self):
+        d = {"id": "x", "opened_at": "2026-07-14T10:00:00+00:00", "closed_at": None}
+        assert Incident.from_dict(d).status_message == ""
+
+    def test_message_preserved_after_suggestion_attach(self):
+        inc = Incident.open(status_message="unseal needed")
+        s = Suggestion.from_llm("diagnosis", ["bao operator unseal"])
+        updated = inc.attach_suggestion(s)
+        assert updated.status_message == "unseal needed"
 
 
 class TestSuggestion:
