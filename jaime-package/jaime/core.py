@@ -23,7 +23,7 @@ from enum import Enum
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
 from jaime.incident import Incident, Suggestion
-from jaime.logging import write_event
+from jaime.logging import list_incidents, rotate_audit_log, write_event
 from jaime.report import generate_report
 from jaime.suggest import run_act, run_suggest
 
@@ -349,6 +349,14 @@ class CoreMixin:
                     "incident": closed.to_dict(),
                     "timestamp": now.isoformat(),
                 }))
+                write_event({
+                    "event": "incident-closed",
+                    "unit": unit_name,
+                    "workload": status,
+                    "incident_id": closed.id,
+                    "closed_at": closed.closed_at,
+                    "timestamp": now.isoformat(),
+                }, self.model.config.get("audit-log-path", ""))
             elif increment == 1:
                 logger.debug(json.dumps({
                     "event": "principal-status-recovered",
@@ -429,12 +437,13 @@ class CoreMixin:
                 return
 
         # --- Open a new incident ---
-        incident = Incident.open()
+        incident = Incident.open(status_message=message)
         short_id = incident.id[:8]
         logger.info(json.dumps({
             "event": "incident-opened",
             "unit": unit_name,
             "workload": status,
+            "status_message": message,
             "first_seen": first_seen,
             "status_since": since_iso,
             "increment": increment,
@@ -448,6 +457,7 @@ class CoreMixin:
             "event": "incident-start",
             "unit": unit_name,
             "workload": status,
+            "status_message": message,
             "first_seen": first_seen,
             "status_since": since_iso,
             "incident_id": incident.id,
@@ -649,6 +659,27 @@ class CoreMixin:
 
     def _on_action_reset(self, event):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        audit_path = self.model.config.get("audit-log-path", "")
+
+        # Close every incident still open in the audit log as well as the ones
+        # the tracker carries. events.jsonl is append-only and remembers every
+        # incident ever opened, while status-state.json keeps only the latest
+        # per unit — so a reset that closes only the tracked incidents would
+        # leave older audit rows reported as open by list-incidents forever.
+        # Append a closure row per open incident; we never rewrite history.
+        open_records = list_incidents(audit_path)
+        closed_incident_ids = set()
+        for record in open_records:
+            closed_incident_ids.add(record["incident_id"])
+            write_event({
+                "event": "incident-closed",
+                "unit": record["unit"],
+                "reason": "manual reset",
+                "incident_id": record["incident_id"],
+                "closed_at": now,
+                "timestamp": now,
+            }, audit_path)
+
         for unit_name in list(self._status_tracker._state):
             if self._status_tracker.has_open_incident(unit_name):
                 incident_dict = self._status_tracker.current_incident(unit_name)
@@ -660,7 +691,40 @@ class CoreMixin:
                     "incident": closed.to_dict(),
                     "timestamp": now,
                 }))
+                # The list_incidents pass above already closed this incident in
+                # the audit log; write only if it was not found there, so an
+                # incident never gets two closure rows for the same reset.
+                if closed.id not in closed_incident_ids:
+                    write_event({
+                        "event": "incident-closed",
+                        "unit": unit_name,
+                        "reason": "manual reset",
+                        "incident_id": closed.id,
+                        "closed_at": closed.closed_at,
+                        "timestamp": now,
+                    }, audit_path)
+
+        # Rotate the audit log: archive the now-closed history and start a
+        # fresh file, so list-incidents shows no residual incidents while the
+        # archived trail is kept for forensics.
+        rotate_audit_log(audit_path)
+
         self._status_tracker.reset()
         self.unit.status = ActiveStatus(self._ready_message())
         logger.info("status state cleared")
         event.set_results({"result": "status state cleared"})
+
+    def _on_action_list_incidents(self, event):
+        """Return incidents recorded in the audit log, newest first.
+
+        Correlates ``incident-start`` / ``report-generated`` /
+        ``incident-closed`` events by incident id, with an optional ``unit``
+        filter. Tolerates a missing or malformed log. The result is a JSON
+        array under ``result`` because Juju action results are a flat map of
+        scalars.
+        """
+        unit = event.params.get("unit", "").strip()
+        incidents = list_incidents(
+            self.model.config.get("audit-log-path", ""), unit=unit
+        )
+        event.set_results({"result": json.dumps(incidents, indent=2)})

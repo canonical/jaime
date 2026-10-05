@@ -106,23 +106,32 @@ class Incident:
     """An incident for a principal unit.
 
     Attributes:
-        id:         Stable UUID assigned when the incident is first opened.
-        opened_at:  ISO 8601 timestamp (UTC) when the incident was opened.
-        closed_at:  ISO 8601 timestamp (UTC) when the incident was closed, or None.
-        suggestion: AI-generated suggestion, or None if not yet produced.
+        id:              Stable UUID assigned when the incident is first opened.
+        opened_at:       ISO 8601 timestamp (UTC) when the incident was opened.
+        status_message:  The workload status message ("reason") at incident open.
+        closed_at:       ISO 8601 timestamp (UTC) when the incident was closed, or None.
+        suggestion:      AI-generated suggestion, or None if not yet produced.
     """
 
     id: str
     opened_at: str
+    status_message: str = ""
     closed_at: str | None = None
     suggestion: Suggestion | None = None
 
     @classmethod
-    def open(cls) -> "Incident":
-        """Create a new incident with a fresh UUID and the current UTC time."""
+    def open(cls, status_message: str = "") -> "Incident":
+        """Create a new incident with a fresh UUID and the current UTC time.
+
+        ``status_message`` is the workload's status message ("reason") at the
+        time the incident opens. It is a snapshot: if the message changes
+        during the episode (e.g. a retry loop re-setting the same status with
+        a new message), the incident keeps the reason it was opened with.
+        """
         return cls(
             id=str(uuid.uuid4()),
             opened_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            status_message=status_message,
         )
 
     def close(self) -> "Incident":
@@ -142,6 +151,8 @@ class Incident:
 
     def to_dict(self) -> dict:
         d = {"id": self.id, "opened_at": self.opened_at}
+        if self.status_message:
+            d["status_message"] = self.status_message
         if self.closed_at is not None:
             d["closed_at"] = self.closed_at
         if self.suggestion is not None:
@@ -156,6 +167,7 @@ class Incident:
         return cls(
             id=d["id"],
             opened_at=d["opened_at"],
+            status_message=d.get("status_message", ""),
             closed_at=d.get("closed_at"),
             suggestion=suggestion,
         )
