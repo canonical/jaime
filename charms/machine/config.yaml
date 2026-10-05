@@ -11,11 +11,18 @@ options:
     default: observe
   provider:
     type: string
-    description: "AI provider to use for optional report generation. Use 'none' for no provider."
+    description: >
+      AI provider to use for optional report generation. Allowed values:
+      'none' (no provider; the charm always produces a non-AI report),
+      'gemini', or 'openrouter'.
     default: none
   model:
     type: string
-    description: "AI model name used by the selected provider (optional)."
+    description: >
+      AI model to use with the selected provider (optional). Any model the
+      provider supports is accepted. When empty, a provider default is used:
+      'gemini-2.5-flash' for gemini and '~deepseek/deepseek-v4-flash-latest'
+      for openrouter. Ignored when provider is 'none'.
     default: ""
   api-token:
     type: string

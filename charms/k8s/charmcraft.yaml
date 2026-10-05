@@ -6,8 +6,9 @@ title: Jaime k8s
 summary: Jaime k8s - Juju AI Medic Engine for Kubernetes
 description: |
   Jaime k8s is a Juju Kubernetes charm that monitors applications in the same
-  model, collects bounded diagnostic context via kubectl, and writes structured
-  incident reports. Optionally calls an AI provider for diagnosis suggestions.
+  model, collects bounded diagnostic context via the Kubernetes API, and writes
+  structured incident reports. Optionally calls an AI provider for diagnosis
+  suggestions.
 links:
   contact:
     - ljupcho.vangelski@canonical.com
@@ -19,23 +20,56 @@ links:
     - https://github.com/canonical/jaime
 
 version: "0.0.1"
-base: ubuntu@24.04
 platforms:
+  ubuntu-22.04-amd64:
+    build-on:
+      - ubuntu@22.04:amd64
+    build-for:
+      - ubuntu@22.04:amd64
+  ubuntu-22.04-arm64:
+    build-on:
+      - ubuntu@22.04:arm64
+    build-for:
+      - ubuntu@22.04:arm64
+
   ubuntu-24.04-amd64:
-    build-on: [amd64]
-    build-for: [amd64]
+    build-on:
+      - ubuntu@24.04:amd64
+    build-for:
+      - ubuntu@24.04:amd64
+  ubuntu-24.04-arm64:
+    build-on:
+      - ubuntu@24.04:arm64
+    build-for:
+      - ubuntu@24.04:arm64
+
+  ubuntu-26.04-amd64:
+    build-on:
+      - ubuntu@26.04:amd64
+    build-for:
+      - ubuntu@26.04:amd64
+  ubuntu-26.04-arm64:
+    build-on:
+      - ubuntu@26.04:arm64
+    build-for:
+      - ubuntu@26.04:arm64
 
 parts:
   charm:
-    plugin: charm
+    plugin: uv
     source: .
+    build-snaps:
+      - astral-uv
     override-build: |
       cp -r _jaime-package/jaime/. src/jaime/
       craftctl default
-    override-prime: |
-      craftctl default
-      chmod +x $CRAFT_PRIME/dispatch
-      chmod +x $CRAFT_PRIME/src/charm.py
+  icon:
+    plugin: dump
+    source: .
+    stage:
+      - icon.svg
+    prime:
+      - icon.svg
 
 analysis:
   ignore:

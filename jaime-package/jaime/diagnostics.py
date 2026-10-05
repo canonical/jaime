@@ -178,7 +178,7 @@ def build_prompt(principal_name):
     schema_json = json.dumps(DIAGNOSTICS_SCHEMA, indent=2)
 
     prompt = (
-        "You are a diagnostic planning assistant for Juju charms running on Ubuntu 24.04.\n"
+        "You are a diagnostic planning assistant for Juju charms running on Ubuntu LTS.\n"
         f"\n"
         f"The principal charm name is: {principal_name}\n"
         f"\n"

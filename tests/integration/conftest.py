@@ -31,8 +31,31 @@ except ImportError:  # pragma: no cover
 
 DIST_DIR = pathlib.Path(__file__).resolve().parents[2] / "dist"
 
-MACHINE_CHARM_GLOB = "jaime_*.charm"
-K8S_CHARM_GLOB = "jaime-k8s_*.charm"
+JAIME_APP = "jaime"
+
+# any-charm is used as the principal rather than a real workload because its
+# status can be driven deterministically via set_principal_status, so the tests
+# do not depend on a particular charm's internal service names or on which
+# status that charm happens to report when it degrades. Covering a realistic
+# principal is tracked separately in TASKS.md 5.2.
+PRINCIPAL_APP = "any-charm"
+PRINCIPAL_CHANNEL = "latest/beta"
+PRINCIPAL_BASE = "ubuntu@24.04"
+PRINCIPAL_UNIT = f"{PRINCIPAL_APP}/0"
+
+# The Jaime machine charm is a subordinate: Juju refuses to relate a
+# subordinate to a principal whose base it does not support:
+#
+#   ERROR cannot add relation "jaime:principal <app>:juju-info": subordinate
+#   must support principal application's base
+#
+# The charms are now built for multiple bases (22.04, 24.04, 26.04), so the
+# packed artifact must be the one matching the principal's base. The k8s charm
+# is standalone and any base works, so the same 24.04 artifact is used for
+# consistency.
+PRINCIPAL_SERIES_TAG = PRINCIPAL_BASE.replace("@", "-")
+MACHINE_CHARM_GLOB = f"jaime_*{PRINCIPAL_SERIES_TAG}-amd64.charm"
+K8S_CHARM_GLOB = f"jaime-k8s_*{PRINCIPAL_SERIES_TAG}-amd64.charm"
 
 # The k8s RoleBinding in charms/k8s/jaime-k8s-rbac.yaml is bound to the
 # jaime-k8s ServiceAccount, which Juju names after the application. Deploying
@@ -42,27 +65,6 @@ K8S_APP_NAME = "jaime-k8s"
 # Kept short so incidents open within the lifetime of a test rather than the
 # five-minute production default.
 FAILURE_TIMEOUT_MINUTES = 1
-
-JAIME_APP = "jaime"
-
-# The Jaime machine charm is built for ubuntu@24.04 only, and Juju refuses to
-# relate a subordinate to a principal whose base it does not support:
-#
-#   ERROR cannot add relation "jaime:principal <app>:juju-info": subordinate
-#   must support principal application's base
-#
-# So the principal must also be on 24.04. That rules out mysql 8.0/stable and
-# postgresql 14/stable, which are both jammy; postgresql 16/stable is noble.
-#
-# any-charm is used rather than a real workload because its status can be
-# driven deterministically via set_principal_status, so the tests do not
-# depend on a particular charm's internal service names or on which status
-# that charm happens to report when it degrades. Covering a realistic
-# principal is tracked separately in TASKS.md 5.2.
-PRINCIPAL_APP = "any-charm"
-PRINCIPAL_CHANNEL = "latest/beta"
-PRINCIPAL_BASE = "ubuntu@24.04"
-PRINCIPAL_UNIT = f"{PRINCIPAL_APP}/0"
 
 
 def jaime_unit(juju) -> str:
@@ -120,13 +122,13 @@ def show_status(juju, jaime_app_unit: str, unit: str) -> dict:
 
 
 def _charm_path(glob: str) -> pathlib.Path:
-    """Locate a packed charm, failing with a build hint if it is missing."""
+    """Locate a packed charm for the principal's series, failing with a hint."""
     matches = sorted(DIST_DIR.glob(glob))
     if not matches:
         pytest.fail(
             f"No charm matching {glob!r} in {DIST_DIR}. Run `make pack-all` first."
         )
-    return matches[-1]
+    return matches[0]
 
 
 def pytest_addoption(parser):
