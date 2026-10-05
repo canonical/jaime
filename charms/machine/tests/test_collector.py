@@ -338,9 +338,11 @@ class TestCollectCharmConfig:
     def test_returns_config_and_actions(self):
         config_yaml = "options:\n  port:\n    default: 5432\n"
         actions_yaml = "actions:\n  restart:\n    description: Restart\n"
+        metadata_yaml = "docs: https://discourse.charmhub.io/t/postgresql/12345\n"
         contents = {
             "/var/lib/juju/agents/unit-postgresql-0/charm/config.yaml": config_yaml,
             "/var/lib/juju/agents/unit-postgresql-0/charm/actions.yaml": actions_yaml,
+            "/var/lib/juju/agents/unit-postgresql-0/charm/metadata.yaml": metadata_yaml,
         }
         import jaime.collector as jcollector
         with mock.patch("builtins.open", mock.mock_open()) as m:
@@ -348,12 +350,14 @@ class TestCollectCharmConfig:
             result = jcollector.collect_charm_config("postgresql/0")
         assert result["config_yaml"] == config_yaml
         assert result["actions_yaml"] == actions_yaml
+        assert result["metadata_yaml"] == metadata_yaml
 
     def test_missing_files_returns_empty(self):
         import jaime.collector as jcollector
         result = jcollector.collect_charm_config("nonexistent/0")
         assert result["config_yaml"] == ""
         assert result["actions_yaml"] == ""
+        assert result["metadata_yaml"] == ""
 
 
 class TestCollectTracingEvents:

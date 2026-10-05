@@ -8,6 +8,7 @@ in suggest/act mode. It does not contain LLM output.
 import datetime
 import logging
 import os
+import re
 
 import yaml
 
@@ -32,6 +33,7 @@ def generate_report(
     first_seen: str,
     context: dict,
     report_dir: str = "",
+    status_message: str = "",
 ) -> str:
     """Generate a Markdown context report and write it to disk.
 
@@ -42,18 +44,23 @@ def generate_report(
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     lines = []
 
-    _append(lines, [
+    header = [
         "# Incident Report",
         f"- incident: {incident_id}",
         f"- unit: {unit_name}",
         f"- status: {workload}",
+    ]
+    if status_message:
+        header.append(f"- status-message: {status_message}")
+    header.extend([
         f"- first-seen: {first_seen}",
         f"- generated: {now}",
     ])
+    _append(lines, header)
 
     plan_results = context.get("plan_results", {})
 
-    _append_section_summary(lines, workload, context, plan_results)
+    _append_section_summary(lines, workload, context, plan_results, status_message)
     _append_section_network(lines, plan_results)
     _append_section_ss_connections(lines, context)
     _append_section_firewall_rules(lines, context)
@@ -71,6 +78,8 @@ def generate_report(
     _append_section_k8s_resource_usage(lines, context)
     _append_section_juju_config(lines, context)
     _append_section_charm_config(lines, context)
+    _append_section_charm_actions(lines, context)
+    _append_section_charm_metadata(lines, context)
     _append_section_disk(lines, context)
     _append_section_memory(lines, context)
     _append_section_logs(lines, context)
@@ -92,13 +101,18 @@ def generate_report(
 
 
 def _append_section_summary(lines: list[str], workload: str,
-                             context: dict, plan_results: dict) -> None:
+                             context: dict, plan_results: dict,
+                             status_message: str = "") -> None:
     """Compact executive summary — highest-signal content first.
 
-    Surfaces error/warning log lines and explicitly-set config options
-    so the LLM can form a diagnosis before reading the full detail sections.
+    Surfaces the workload status message (what Juju reports as the reason the
+    unit is unhealthy), then error/warning log lines and explicitly-set config
+    options so the LLM can form a diagnosis before reading the full detail
+    sections.
     """
     summary = ["## Executive summary", f"Unit is in **{workload}** state."]
+    if status_message:
+        summary.append(f"Status message: {status_message}")
 
     # Most recent error/warning log lines (up to 10), deduplicated so a burst
     # of identical failures (e.g. health-check errors firing every few seconds)
@@ -362,11 +376,120 @@ def _append_section_charm_config(lines: list[str], context: dict) -> None:
 
     _append(lines, ["## Charm config"])
     items = sorted(options.items())
-    for key, opt in items[:_MAX_CHARM_OPTIONS]:
+    # Empty-string defaults are schema noise: the option is declared but has
+    # no default value, so it carries no signal. Boolean/int False/0 defaults
+    # are kept because "disabled" or "off" is meaningful.
+    shown = [
+        (key, opt) for key, opt in items
+        if opt.get("default") not in (None, "")
+    ]
+    skipped_empty = len(items) - len(shown)
+    for key, opt in shown[:_MAX_CHARM_OPTIONS]:
         default = opt.get("default", "")
         _append(lines, [f"- `{key}`: `{default}`"])
-    if len(items) > _MAX_CHARM_OPTIONS:
-        _append(lines, [f"_… {len(items) - _MAX_CHARM_OPTIONS} more options omitted._"])
+    omitted = []
+    if skipped_empty:
+        omitted.append(f"{skipped_empty} options with empty defaults")
+    if len(shown) > _MAX_CHARM_OPTIONS:
+        omitted.append(f"{len(shown) - _MAX_CHARM_OPTIONS} more options")
+    if omitted:
+        _append(lines, [f"_… {' and '.join(omitted)} omitted._"])
+    if not shown:
+        _append(lines, ["_No non-empty option defaults._"])
+
+
+_ACTION_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*$")
+
+
+def _append_section_charm_actions(lines: list[str], context: dict) -> None:
+    """List the principal charm's declared actions (from its actions.yaml).
+
+    The model is asked to suggest a remediation command, so it must know which
+    ``juju run <unit> <action>`` commands actually exist. The machine collector
+    already reads actions.yaml and carries it as ``charm_config.actions_yaml``;
+    this section renders the action names (and their descriptions) so the
+    suggestion cannot invent actions that are not there.
+    """
+    charm_config = context.get("charm_config", {})
+    actions_yaml = charm_config.get("actions_yaml", "")
+    if not actions_yaml:
+        return
+
+    try:
+        parsed = yaml.safe_load(actions_yaml)
+    except Exception as e:
+        logger.debug("could not parse charm actions YAML: %s", e)
+        return
+    actions = parsed or {}
+    if not isinstance(actions, dict) or not actions:
+        return
+
+    # Only the top-level action names are declarations; a bare YAML document
+    # (e.g. empty or a scalar) is not a set of actions.
+    declared = {
+        name: (definition or {})
+        for name, definition in actions.items()
+        if _ACTION_NAME_RE.match(str(name)) and isinstance(definition, dict)
+    }
+    if not declared:
+        return
+
+    _append(lines, ["## Available actions"])
+    for name in sorted(declared):
+        description = declared[name].get("description", "")
+        if description:
+            _append(lines, [f"- `{name}` — {description}"])
+        else:
+            _append(lines, [f"- `{name}`"])
+
+
+# Keys in a charm's metadata.yaml that are URLs (or lists of URLs) pointing at
+# project resources. Rendered so the model can reference the official
+# documentation, source, and issue tracker instead of guessing.
+_METADATA_LINK_KEYS = (
+    "docs", "website", "contact", "source", "issues", "bugs", "repository",
+)
+
+
+def _append_section_charm_metadata(lines: list[str], context: dict) -> None:
+    """List the principal charm's project links from its metadata.yaml.
+
+    The suggest prompt is asked to produce a remediation for a charm it does
+    not know. The machine collector reads metadata.yaml; this section renders
+    the documentation/source/issue URLs it declares so the model can reference
+    the official docs rather than invent a procedure. k8s has no equivalent:
+    a pod cannot read sibling applications' charm directories.
+    """
+    charm_config = context.get("charm_config", {})
+    metadata_yaml = charm_config.get("metadata_yaml", "")
+    if not metadata_yaml:
+        return
+
+    try:
+        parsed = yaml.safe_load(metadata_yaml)
+    except Exception as e:
+        logger.debug("could not parse charm metadata YAML: %s", e)
+        return
+    meta = parsed or {}
+    if not isinstance(meta, dict):
+        return
+
+    sections: list[str] = []
+    for key in _METADATA_LINK_KEYS:
+        value = meta.get(key)
+        if not value:
+            continue
+        if isinstance(value, str):
+            sections.append(f"- {key}: {value}")
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.startswith("http"):
+                    sections.append(f"- {key}: {item}")
+    if not sections:
+        return
+
+    _append(lines, ["## Charm links"])
+    _append(lines, sections)
 
 
 def _append_section_disk(lines: list[str], context: dict) -> None:

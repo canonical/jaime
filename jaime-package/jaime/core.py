@@ -316,8 +316,15 @@ class CoreMixin:
     # Incident lifecycle (shared state machine)
     # ------------------------------------------------------------------
 
-    def _process_unit(self, unit_name: str, status: str, since_iso: str) -> None:
-        """Drive the incident lifecycle for a single observed unit."""
+    def _process_unit(self, unit_name: str, status: str, since_iso: str,
+                      message: str = "") -> None:
+        """Drive the incident lifecycle for a single observed unit.
+
+        ``message`` is the workload status message shown by ``juju status``
+        (e.g. "Please initialize OpenBao or integrate with an auto-unseal
+        provider"). Empty when the observing path cannot see it — the machine
+        charm's goal-state hook tool carries no message.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         watch_statuses = self._watch_statuses()
         failure_timeout = self.model.config.get("failure-timeout-minutes", 5)
@@ -327,7 +334,7 @@ class CoreMixin:
         had_open_incident = self._status_tracker.has_open_incident(unit_name)
         prior_incident = self._status_tracker.current_incident(unit_name)
         increment = self._status_tracker.observe(
-            unit_name, status, since_iso, watched
+            unit_name, status, since_iso, watched, message
         )
 
         # --- Recovery ---
@@ -460,6 +467,7 @@ class CoreMixin:
             first_seen=first_seen,
             context=context,
             report_dir=self.model.config.get("report-dir", ""),
+            status_message=message,
         )
         write_event({
             "event": "report-generated",
@@ -504,6 +512,7 @@ class CoreMixin:
             {
                 "unit": unit_name,
                 "workload": entry.get("status", "unknown"),
+                "status-message": entry.get("message", ""),
                 "first-seen": entry.get("unhealthy_since") or entry.get("since", ""),
                 "status-since": entry.get("since", ""),
                 "increment": entry.get("increment", 0),
@@ -629,6 +638,7 @@ class CoreMixin:
                     first_seen=since_iso,
                     context=context,
                     report_dir=self.model.config.get("report-dir", ""),
+                    status_message=entry.get("message", ""),
                 )
                 event.set_results({
                     "incident-id": inc["id"],

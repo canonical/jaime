@@ -35,6 +35,17 @@ into one command.
 juju config postgresql some-key=true
 ```
 
+The report may list the workload's available actions under "Available actions". \
+If you suggest a `juju run <unit> <action>` command, the action MUST appear in \
+that list — never invent an action that is not listed. If no suitable action \
+exists in the report, suggest a juju config change or a documented operator \
+command instead.
+
+The report may list project resources under "Charm links" (documentation, \
+source, issue tracker). Base your remediation on what those official sources \
+say about the workload, and cite the relevant URL in your diagnosis. Never \
+invent a URL or a procedure that is not in the report.
+
 Keep your response concise and focused on the incident.
 
 {additional_context_section}Incident report:

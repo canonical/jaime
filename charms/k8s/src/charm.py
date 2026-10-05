@@ -192,7 +192,9 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         for unit_name, info in statuses.items():
             status = info["status"]
             since_iso = info["since"] or now.isoformat()
-            self._process_unit(unit_name, status, since_iso)
+            self._process_unit(
+                unit_name, status, since_iso, info.get("message", "")
+            )
 
     # ------------------------------------------------------------------
     # Juju controller access

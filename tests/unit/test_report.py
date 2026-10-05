@@ -44,6 +44,29 @@ class TestGenerateReport:
         content = open(path).read()
         assert "blocked" in content
 
+    def test_status_message_rendered_in_header(self, tmp_path):
+        message = "Please initialize OpenBao or integrate with an auto-unseal provider"
+        path = generate_report(
+            INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, _FULL_CONTEXT,
+            str(tmp_path), status_message=message,
+        )
+        content = open(path).read()
+        assert f"- status-message: {message}" in content
+
+    def test_status_message_rendered_in_summary(self, tmp_path):
+        message = "Please initialize OpenBao or integrate with an auto-unseal provider"
+        path = generate_report(
+            INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, _FULL_CONTEXT,
+            str(tmp_path), status_message=message,
+        )
+        content = open(path).read()
+        assert f"Status message: {message}" in content
+
+    def test_no_status_message_omits_line(self, tmp_path):
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, _FULL_CONTEXT, str(tmp_path))
+        content = open(path).read()
+        assert "status-message:" not in content
+
     def test_report_contains_first_seen(self, tmp_path):
         path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, _FULL_CONTEXT, str(tmp_path))
         content = open(path).read()
@@ -279,6 +302,130 @@ class TestReportPlanResults:
         # Raw YAML content should NOT appear
         assert "Listen port" not in content
         assert "description" not in content
+
+    def test_charm_config_omits_empty_defaults_with_marker(self, tmp_path):
+        import yaml
+        config_yaml = yaml.dump({
+            "options": {
+                "port": {"type": "int", "default": 5432, "description": "Listen port"},
+                "ca_country_name": {"type": "string", "default": "", "description": "Country"},
+                "ca_locality": {"type": "string", "default": "", "description": "Locality"},
+                "max_ttl": {"type": "string", "default": "720h", "description": "Max lease TTL"},
+            },
+        })
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": config_yaml, "actions_yaml": ""},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        # Non-empty defaults shown.
+        assert "`5432`" in content
+        assert "`720h`" in content
+        # Empty-string defaults are schema noise: omitted, with a marker.
+        assert "`ca_country_name`" not in content
+        assert "`ca_locality`" not in content
+        assert "2 options with empty defaults" in content
+
+    def test_charm_config_empty_only_section(self, tmp_path):
+        import yaml
+        config_yaml = yaml.dump({
+            "options": {
+                "ca_country_name": {"type": "string", "default": "", "description": "Country"},
+            },
+        })
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": config_yaml, "actions_yaml": ""},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "No non-empty option defaults" in content
+
+    def test_charm_actions_listed(self, tmp_path):
+        import yaml
+        actions_yaml = yaml.dump({
+            "initialize": {"description": "Initialize the service"},
+            "unseal": {"description": "Unseal the service"},
+            "get-status": {"description": "Get service status"},
+        })
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "", "actions_yaml": actions_yaml},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "## Available actions" in content
+        assert "`initialize`" in content
+        assert "`unseal`" in content
+        assert "`get-status`" in content
+        # descriptions included so the model knows what each action does
+        assert "Initialize the service" in content
+
+    def test_charm_actions_omitted_when_empty(self, tmp_path):
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "", "actions_yaml": ""},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "Available actions" not in content
+
+    def test_empty_actions_yaml_omits_section(self, tmp_path):
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "", "actions_yaml": "%%% not yaml"},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "Available actions" not in content
+
+    def test_charm_links_listed(self, tmp_path):
+        import yaml
+        metadata_yaml = yaml.dump({
+            "name": "openbao",
+            "docs": "https://discourse.charmhub.io/t/openbao-operator-machine/12983",
+            "source": ["https://github.com/canonical/openbao-omnicraft"],
+            "issues": ["https://github.com/canonical/openbao-omnicraft/issues"],
+            "website": ["https://canonical-openbao-charms.readthedocs-hosted.com/"],
+        })
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "", "actions_yaml": "", "metadata_yaml": metadata_yaml},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "## Charm links" in content
+        assert "https://discourse.charmhub.io/t/openbao-operator-machine/12983" in content
+        assert "https://github.com/canonical/openbao-omnicraft" in content
+        assert "https://github.com/canonical/openbao-omnicraft/issues" in content
+        assert "https://canonical-openbao-charms.readthedocs-hosted.com/" in content
+
+    def test_charm_links_omitted_when_empty(self, tmp_path):
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "", "actions_yaml": "", "metadata_yaml": ""},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "Charm links" not in content
+
+    def test_non_url_metadata_fields_not_rendered_as_links(self, tmp_path):
+        import yaml
+        metadata_yaml = yaml.dump({
+            "name": "openbao",
+            "summary": "A tool for managing secrets",
+            "docs": "https://discourse.charmhub.io/t/openbao-operator-machine/12983",
+        })
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "", "actions_yaml": "", "metadata_yaml": metadata_yaml},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "Charm links" in content
+        assert "https://discourse.charmhub.io/t/openbao-operator-machine/12983" in content
+        assert "managing secrets" not in content
 
 
 def _render(tmp_path, context):

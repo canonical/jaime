@@ -75,7 +75,29 @@ def line_pattern(line: str) -> str:
 
 
 def deduplicate_lines(lines: list[str], threshold: int = 3) -> list[str]:
-    """Collapse runs of structurally identical lines or repeating block patterns."""
+    """Collapse repeated log lines to first occurrence plus a count.
+
+    Two passes:
+
+    1. Runs: consecutive lines that are structurally identical once variable
+       tokens (timestamps, numbers, hex, paths) are stripped get collapsed,
+       as do repeating block patterns.
+    2. Frequency: a structural pattern that recurs *anywhere* in the input
+       (not just in a consecutive run) is collapsed to its first occurrence,
+       followed by a count. This handles timers that re-log the same warning
+       every few seconds — e.g. a charm emitting the same block of warnings on
+       every ``update-status`` cycle — where the runs are separated by the
+       cycle's other messages, so pass 1 cannot see them as a run.
+
+    Either pass only collapses a pattern that occurs at least ``threshold``
+    times, so a one-off ambiguous match is never lost. The result preserves
+    the order of first occurrences.
+    """
+    return _collapse_frequency(_collapse_runs(lines, threshold), threshold)
+
+
+def _collapse_runs(lines: list[str], threshold: int = 3) -> list[str]:
+    """Collapse consecutive runs or repeating blocks of structurally-identical lines."""
     result: list[str] = []
     i = 0
     n = len(lines)
@@ -104,4 +126,44 @@ def deduplicate_lines(lines: list[str], threshold: int = 3) -> list[str]:
             result.append(lines[i])
             i += 1
 
+    return result
+
+
+def _collapse_frequency(lines: list[str], threshold: int = 3) -> list[str]:
+    """Collapse patterns that recur anywhere in the input, keeping first only.
+
+    The first occurrence of each structural pattern is kept with a count of
+    how many later occurrences were omitted. ``…`` marker lines emitted by the
+    runs pass are carried through unchanged.
+    """
+    collapsed_patterns: set[str] = set()
+    order: list[str] = []
+    counts: dict[str, int] = {}
+    for line in lines:
+        if line.strip().startswith("…"):
+            continue
+        pattern = line_pattern(line)
+        counts[pattern] = counts.get(pattern, 0) + 1
+        if pattern not in order:
+            order.append(pattern)
+    for pattern in order:
+        if counts[pattern] >= threshold:
+            collapsed_patterns.add(pattern)
+
+    emitted: set[str] = set()
+    result: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("…"):
+            result.append(line)
+            continue
+        pattern = line_pattern(line)
+        if pattern in collapsed_patterns:
+            if pattern in emitted:
+                continue
+            emitted.add(pattern)
+            result.append(line)
+            result.append(f"    … {counts[pattern] - 1} similar lines omitted")
+        else:
+            result.append(line)
     return result
