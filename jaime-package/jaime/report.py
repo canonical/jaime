@@ -13,6 +13,11 @@ import re
 import yaml
 
 from jaime.logutils import deduplicate_lines
+from jaime.redact import (
+    is_secret_option,
+    redact_config_value,
+    redact_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,24 @@ def _append(lines: list[str], *chunks: list[str]) -> None:
     for chunk in chunks:
         lines.extend(chunk)
         lines.append("")
+
+
+def _config_value_display(key: str, opt: dict) -> str:
+    """Value rendering for a Juju config option, redacted when sensitive."""
+    return redact_config_value(key, opt.get("value"), opt.get("type"))
+
+
+def _config_line(key: str, opt: dict) -> str:
+    """One config option as a Markdown list item.
+
+    A sensitive option keeps its name and drops the value and default, so the
+    report stays diagnostic without exposing either.
+    """
+    value = _config_value_display(key, opt)
+    if is_secret_option(key, opt.get("value"), opt.get("type")):
+        return f"- `{key}`: `{value}`"
+    default = redact_text("" if opt.get("default") is None else str(opt.get("default")))
+    return f"- `{key}`: `{value}` (default: `{default}`)"
 
 
 def generate_report(
@@ -85,7 +108,7 @@ def generate_report(
     _append_section_memory(lines, context)
     _append_section_logs(lines, context)
 
-    content = "\n".join(lines)
+    content = redact_text("\n".join(lines))
 
     os.makedirs(report_dir, exist_ok=True)
     report_path = os.path.join(report_dir, f"{incident_id}.md")
@@ -141,9 +164,7 @@ def _append_section_summary(lines: list[str], workload: str,
         summary.append("")
         summary.append("**Config changed from default by operator:**")
         for k, v in sorted(user_changed.items()):
-            summary.append(
-                f"- `{k}`: `{v.get('value')}` (default: `{v.get('default')}`)"
-            )
+            summary.append(_config_line(k, v))
 
     # Charm config options that are explicitly set (non-empty, non-False).
     charm_config = context.get("charm_config", {})
@@ -610,14 +631,12 @@ def _append_section_juju_config(lines: list[str], context: dict) -> None:
     if changed:
         _append(lines, ["**Changed from default:**"])
         for key, opt in sorted(changed.items()):
-            _append(lines, [
-                f"- `{key}`: `{opt.get('value')}` (default: `{opt.get('default')}`)"
-            ])
+            _append(lines, [_config_line(key, opt)])
 
     _append(lines, ["**All options:**", "```"])
     for key, opt in sorted(options.items()):
         marker = " *" if opt.get("source") == "user" else ""
-        _append(lines, [f"{key}: {opt.get('value')}{marker}"])
+        _append(lines, [f"{key}: {_config_value_display(key, opt)}{marker}"])
     _append(lines, ["```", "_(* = changed from default)_"])
 
 

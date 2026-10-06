@@ -83,6 +83,7 @@ jaime-package/jaime/        shared code
   diagnostics.py            diagnostics plan schema, validation (machine + k8s), persistence
   controller.py             Juju controller API client (used by the k8s charm)
   logging.py, logutils.py   JSONL audit log, log filtering/de-duplication
+  redact.py                 secret redaction for report values and free text
   providers/                base, gemini, openrouter
 
 charms/machine/src/
@@ -995,10 +996,17 @@ The reasons:
 Two categories are still filtered at collection, because sending them raw is
 unsafe or unbounded rather than merely expensive: unit and container logs
 (error/warning filter plus de-duplication), and secrets. Environment variables
-are reported as set/unset only, never by value, and other secret-bearing config
-values are redacted before the report is written. There is currently **no
-redaction anywhere**, while the Kubernetes report renders every option value of
-the watched application, so redaction is a prerequisite for collecting more.
+are reported as set/unset only, never by value. Every other secret is redacted
+when the report is written (`redact.py`), which cleans both the persisted report
+and the prompt, since the prompt is built by reading the report back. Config
+values are redacted by option name and Juju type, because a shapeless secret is
+invisible to pattern matching; free text (logs, health-command output, snap
+logs, the status message) is scrubbed against conservative known-shape patterns.
+The marker is `[REDACTED]` and the option name stays visible, so the report keeps
+its diagnostic shape. Redaction deliberately avoids high-entropy guessing, which
+would erase commit SHAs, UUIDs and IDs. The audit log and the persisted
+`status-state.json` are out of scope: a token embedded in a workload status
+message can still reach them.
 
 The descriptive statements that "there is no separate raw context bundle" and
 that "the AI is given the stored report" (see Incident flow and Optional AI

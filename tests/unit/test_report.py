@@ -3,6 +3,7 @@
 import os
 
 from jaime.report import generate_report
+from jaime.suggest import build_suggest_prompt
 
 INCIDENT_ID = "550e8400-e29b-41d4-a716-446655440000"
 FIRST_SEEN = "2026-07-14T09:37:54+00:00"
@@ -579,3 +580,70 @@ class TestPlanContainersSection:
     def test_absent_when_no_plan(self, tmp_path):
         report = _render(tmp_path, {"plan_results": {}})
         assert "## Plan containers" not in report
+
+
+class TestSecretRedaction:
+    """Secrets must not reach the report or a prompt built from it (TASKS 4.9)."""
+
+    _PASSWORD = "hunter2-correct-horse"
+    _TOKEN = "abcdefghijklmnop"
+    _SECRET_URI = "secret:abc123def456"
+    _HEALTH = "supersecret-env-value"
+
+    def _context(self):
+        return {
+            "unit_logs": [f"Authorization: Bearer {self._TOKEN}", "all good"],
+            "juju_config": {
+                "password": {"value": self._PASSWORD, "default": "",
+                             "source": "user", "type": "string"},
+                "port": {"value": "5432", "default": "5432",
+                         "source": "default", "type": "string"},
+                "api-token": {"value": self._SECRET_URI, "default": "",
+                              "source": "user", "type": "secret"},
+            },
+            "plan_results": {"health_commands": {"type": "plan", "items": [{
+                "command": "env", "timeout_seconds": 5, "returncode": 0,
+                "stdout": f"password={self._HEALTH}", "stderr": "",
+            }]}},
+            "collected_at": "2026-10-06T00:00:00+00:00",
+        }
+
+    def test_sensitive_config_value_is_redacted_and_name_kept(self, tmp_path):
+        report = _render(tmp_path, self._context())
+        assert self._PASSWORD not in report
+        assert "`password`" in report
+        assert "[REDACTED]" in report
+
+    def test_secret_typed_option_is_set_or_unset(self, tmp_path):
+        report = _render(tmp_path, self._context())
+        assert self._SECRET_URI not in report
+        assert "abc123def456" not in report
+        assert "`api-token`" in report
+        assert "[REDACTED] (set)" in report
+
+    def test_log_and_health_secrets_are_scrubbed(self, tmp_path):
+        report = _render(tmp_path, self._context())
+        assert self._TOKEN not in report
+        assert self._HEALTH not in report
+        assert "password=[REDACTED]" in report
+
+    def test_ordinary_config_value_is_preserved(self, tmp_path):
+        report = _render(tmp_path, self._context())
+        assert "5432" in report
+
+    def test_status_message_is_scrubbed(self, tmp_path):
+        path = generate_report(
+            INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN,
+            self._context(), str(tmp_path),
+            status_message="auth failed with token=leaked-value",
+        )
+        with open(path) as f:
+            report = f.read()
+        assert "leaked-value" not in report
+        assert "token=[REDACTED]" in report
+
+    def test_prompt_built_from_report_has_no_secret(self, tmp_path):
+        report = _render(tmp_path, self._context())
+        prompt = build_suggest_prompt(report)
+        for secret in (self._PASSWORD, self._TOKEN, self._SECRET_URI, self._HEALTH):
+            assert secret not in prompt

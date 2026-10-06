@@ -515,18 +515,10 @@ tokens, so the persisted report and the prompt can both contain secrets.
 `AGENTS.md` requires secrets never to reach logs, reports or prompts. Collecting
 more evidence (4.5) makes this worse, so redaction is a prerequisite for it.
 
-- [ ] [security] Define what counts as sensitive: config options by name and
-      type, secret-shaped values in logs, and known token formats
-- [ ] [python] Redact before the report is written, so the persisted artifact and
-      the prompt are both clean. Mark the substitution rather than silently
-      deleting evidence, so a reader knows something was removed
-- [ ] [python] Never render secret-typed config values at all; keep only
-      set/unset for them
-- [ ] [python] Redact obvious secrets, tokens and passwords from collected logs
-      and config, absorbing the Phase 1 item
-- [ ] [test] A planted token in a log line and in a config value never appears in
-      the report, the prompt or the audit log
-- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
+Specified in `specs/261006-feature-redact-secrets/`: proposal, design,
+requirements and the task checklist.
+
+- [ ] Agree the change, then implement per its `tasks.md`
 
 ### 4.10. Documentation accuracy
 

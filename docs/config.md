@@ -328,6 +328,23 @@ spec, not that anything is listening. When empty, the fixed pod collection is
 used. An invalid plan blocks the unit. The validator is
 `validate_k8s_diagnostics` in `jaime-package/jaime/diagnostics.py`.
 
+## Secret redaction
+
+Incident reports redact secrets before they are written, so the persisted
+report and the prompt built from it contain none. Config options whose name
+marks them sensitive (`password`, `token`, `secret`, `credential`, and the
+`api-key`/`private-key`/`secret-key`/`access-key` forms) keep their name and
+show `[REDACTED]` instead of the value; a Juju `type: secret` option shows set
+or unset. Recognisable secrets in logs, health-command output, snap logs and the
+status message (Juju secret URIs, `Bearer` tokens, private-key blocks, JWTs, AWS
+access keys, and `password=`/`token:`-style assignments) are replaced with
+`[REDACTED]`.
+
+The policy is deliberately conservative: it does not guess at high-entropy
+strings, so commit SHAs, UUIDs and versions are left intact. The audit log and
+the persisted `status-state.json` are not redacted; do not put secrets in a
+workload status message.
+
 ## Phase-1 recommended config
 
 ```yaml
