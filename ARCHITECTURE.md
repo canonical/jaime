@@ -7,7 +7,7 @@ Jaime observes Juju units, detects sustained unhealthy states, collects compact 
 - **machine subordinate** (`charms/machine/`) — co-located with the principal on the same host. Reads the principal's workload status from local Juju hook tools (`goal-state`) and collects host diagnostics. It can additionally watch other units on the same machine via the Juju controller API when the operator opts in — see [Monitoring scope](#monitoring-scope).
 - **Kubernetes standalone** (`charms/k8s/`) — runs as its own pod and monitors other applications in the same Juju model. Reads workload statuses from the Juju controller API and collects pod logs, events, and metrics from the Kubernetes API.
 
-Both variants are observe-first. AI is used to diagnose and to suggest, never to act: automatic remediation is not implemented, and `mode: act` is blocked until the Phase 7 safety controls exist.
+Both variants are observe-first. AI is used to diagnose and to suggest, never to act: automatic remediation is not implemented, and `mode: act` is blocked until the Phase 8 safety controls exist.
 
 Juju workload status is what opens an incident today. It is not a complete picture of workload health — see [Health model](#health-model).
 
@@ -217,7 +217,7 @@ failures collapse into one entry before anything is sent to an AI provider.
 ### Report structure
 
 The Markdown report is ordered signal-first, so a reader (or the prompt
-projection in 4.9) can stop reading once the incident is understood. Sections
+projection in 6.1) can stop reading once the incident is understood. Sections
 appear in this order, and a section with no data is omitted entirely rather than
 rendered empty:
 
@@ -398,7 +398,7 @@ configured model changes.
 
 **Not implemented, and not part of the current phase.** `run_act` exists in
 `suggest.py`, but setting `mode: act` puts the charm in a blocked state.
-Assisted remediation is Phase 7 of the roadmap.
+Assisted remediation is Phase 8 of the roadmap.
 
 When implemented, act mode must use:
 
@@ -489,7 +489,7 @@ somewhere else. That is worse than not monitoring it: an operator, or an LLM,
 would draw confident conclusions from the wrong machine.
 
 Model-wide coverage comes from deploying the subordinate to more principals, and
-a cluster-level view comes from Phase 6.1 leader aggregation. Neither requires a
+a cluster-level view comes from Phase 7.1 leader aggregation. Neither requires a
 unit to reach beyond its host.
 
 Within that boundary, `watch-applications` selects what to monitor:
@@ -563,7 +563,7 @@ which means duplicate reports and duplicate LLM calls.
 
 This is a known limitation, not a solved problem. Jaime detects the case and
 reports it in its unit status rather than silently double-billing. Deduplicating
-properly needs the peer relation introduced in Phase 6.1, so it is deferred to
+properly needs the peer relation introduced in Phase 7.1, so it is deferred to
 there.
 
 ### Kubernetes standalone
@@ -858,6 +858,8 @@ clear-incident
 
 Phases 1 to 3 are implemented. Phases 4 to 7 are planned. The ideas below are unordered and not committed.
 
+Phase order and the active plan live in `TASKS.md`. A change that alters behaviour, an interface, a config option or a stated boundary is specified under `specs/` before it is implemented, where its decisions, requirements and implementation tasks are recorded.
+
 ## Phase 1 – Machine Observe
 
 Deploy Jaimie as a machine subordinate charm. Detect unhealthy principal units, collect diagnostics, and generate structured incident reports without modifying the environment.
@@ -876,7 +878,7 @@ Adopt the `tests/unit` and `tests/integration` split, move shared-library tests 
 
 ## Phase 4 – Improving user experience
 
-Make both charms pleasant to build, deploy and read output from. Packaging that produces both artifacts without destroying either, Kubernetes deployment that tells the operator what it needs instead of failing silently, consistent configuration across both charms, richer incident reports, and diagnostics-plan parity so the Kubernetes charm collects to a plan as the machine charm already does.
+Make both charms pleasant to build, deploy and read output from. Packaging that produces both artifacts without destroying either, Kubernetes deployment that tells the operator what it needs instead of failing silently, consistent configuration across both charms, richer incident reports, and an operator-supplied Kubernetes diagnostics plan scoped to what the Kubernetes API can observe without exec (container selection, log patterns, env variable names, ports), with AI plan generation deferred.
 
 Machine-charm controller access is accepted, having been deferred pending this
 decision. The machine charm may authenticate to the Juju controller as an
@@ -928,7 +930,7 @@ access, reading the controller machine agent's `agent.conf`, is a deliberate
 privilege escalation and is out of bounds.
 
 The useful idea inside it, one controller connection per cycle rather than one
-per unit, belongs in Phase 6.1, where the leader can query once and publish to
+per unit, belongs in Phase 7.1, where the leader can query once and publish to
 peers over the existing peer relation, with no new charm.
 
 Shipping a third charm was also considered and rejected: a non-subordinate
@@ -939,7 +941,7 @@ mirrors the application it is related to, so relating once gives exactly one
 Jaime per principal unit, including units added later. A placed charm mirrors
 infrastructure instead: coverage becomes manual, a machine missed at deploy time
 yields partial cluster context with no warning, and one unit would aggregate
-across unrelated workloads. Phase 6.1 depends on that 1:1 topology.
+across unrelated workloads. Phase 7.1 depends on that 1:1 topology.
 
 The access is bounded by reach: a machine unit monitors only units on its own
 host, because that is all its collectors can describe truthfully. Watching a
@@ -1007,7 +1009,7 @@ Per-source treatment:
 | failed systemd units | `min(max-context-lines, 50)` | Tier 1 when non-empty |
 | systemd unit detail | one compact line per unit | Tier 1 when failed, else Tier 2 |
 | charm config | option count capped | Tier 3 digest |
-| health commands | `min(max-context-lines, 100)` per stream | Tier 2 until allowlisted (Phase 7 / TASKS 7.1) |
+| health commands | `min(max-context-lines, 100)` per stream | Tier 2 until allowlisted (Phase 8 / TASKS 8.1) |
 | environment variables | names and set/unset, never values | Tier 2 |
 | plan item counts | per-section item caps | - |
 | k8s unit logs | per container and per pod capped | Tier 1 |
@@ -1025,7 +1027,15 @@ pathological line cannot defeat a line-count bound.
 
 Run all three unit suites and lint on every change, add integration tests that deploy the charms and drive a real fault through to a suggestion, then publish to CharmHub with tracks and channels. CI comes first in the implementation order, ahead of Phase 4, because it is cheap and guards everything after it.
 
-## Phase 6 – Clustered operation for machine charms
+## Phase 6 – Deferred and follow-up work
+
+Work consciously left out of the 0.1.0 release, tracked so it is not lost: the
+prompt budget and compaction projection (designed under
+[Context evidence and prompt projection](#context-evidence-and-prompt-projection)),
+a Kubernetes integration job in CI, release automation, and a small set of
+Phase 1 leftovers. The task breakdown is in `TASKS.md` 6.
+
+## Phase 7 – Clustered operation for machine charms
 
 Today a subordinate Jaime unit runs per principal unit, so a multi-unit application produces one independent incident, one LLM call and one report per unit, with no view of the cluster. Elect a leader that aggregates compacted context from its peers, makes a single LLM call per cluster incident, and owns the usage accounting.
 
@@ -1035,11 +1045,11 @@ This phase also owns deduplication when two Jaime units share a machine. See [Mu
 
 Multi-application monitoring is not part of this phase. It landed in 4.3, bounded to a unit's own host, because that is the only scope the machine collectors can report on truthfully. Cross-machine visibility is what leader aggregation provides. See [Monitoring scope](#monitoring-scope).
 
-## Phase 7 – Assisted remediation
+## Phase 8 – Assisted remediation
 
 Execute operator-approved fixes. Requires command and policy allowlisting, bounded execution, a dry-run or equivalent safety control, a structured audit trail, and rollback metadata where practical. This is what `mode: act` will eventually enable; it is blocked today.
 
-Allowlisting covers **two command-execution surfaces**. The first is `mode: act`, which is blocked until the policy exists. The second is the diagnostics plan: `monitoring_plan.health_commands` are executed by the machine collector **today**, and `validate_diagnostics` checks only their structure. That second surface is a known gap this phase closes; the task breakdown is in `TASKS.md` 7.1.
+Allowlisting covers **two command-execution surfaces**. The first is `mode: act`, which is blocked until the policy exists. The second is the diagnostics plan: `monitoring_plan.health_commands` are executed by the machine collector **today**, and `validate_diagnostics` checks only their structure. That second surface is a known gap this phase closes; the task breakdown is in `TASKS.md` 8.1.
 
 # Ideas on the roadmap
 
