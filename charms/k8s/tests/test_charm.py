@@ -338,3 +338,50 @@ class TestMonitoredApplications:
             "postgresql-k8s/0": {}, "mysql-k8s/0": {},
         }
         assert h.charm._ready_message() == "Ready: monitoring mysql-k8s, postgresql-k8s"
+
+
+class TestDiagnosticsConfig:
+    """The k8s `diagnostics` option (TASKS 4.6)."""
+
+    _VALID = '{"postgresql-k8s": {"containers": ["postgresql"]}}'
+
+    def test_valid_plan_stays_active(self):
+        h = _make_harness({"diagnostics": self._VALID})
+        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
+            h.charm._on_config_changed(mock.MagicMock())
+        assert isinstance(h.charm.unit.status, ActiveStatus)
+
+    def test_invalid_json_blocks_with_event(self):
+        h = _make_harness({"diagnostics": "{not json"})
+        with mock.patch("charm.write_event") as mock_event, \
+             mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
+            h.charm._on_config_changed(mock.MagicMock())
+        assert isinstance(h.charm.unit.status, BlockedStatus)
+        assert "invalid diagnostics config" in h.charm.unit.status.message
+        assert mock_event.call_args.args[0]["event"] == "diagnostics-config-invalid"
+
+    def test_invalid_schema_blocks(self):
+        h = _make_harness({"diagnostics": '{"app": {"bogus": []}}'})
+        with mock.patch("charm.write_event"), \
+             mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
+            h.charm._on_config_changed(mock.MagicMock())
+        assert isinstance(h.charm.unit.status, BlockedStatus)
+        assert "unknown keys" in h.charm.unit.status.message
+
+    def test_monitor_honours_invalid_plan(self):
+        h = _make_harness({"diagnostics": "{not json"})
+        with mock.patch.object(h.charm, "_fetch_unit_statuses") as mock_fetch:
+            h.charm._monitor()
+        mock_fetch.assert_not_called()
+        assert isinstance(h.charm.unit.status, BlockedStatus)
+
+    def test_app_plan_slices_by_application(self):
+        h = _make_harness({"diagnostics": self._VALID})
+        assert h.charm._app_diagnostics_plan("postgresql-k8s") == {
+            "containers": ["postgresql"]
+        }
+        assert h.charm._app_diagnostics_plan("other") is None
+
+    def test_empty_plan_returns_none(self):
+        h = _make_harness()
+        assert h.charm._app_diagnostics_plan("postgresql-k8s") is None

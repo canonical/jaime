@@ -4,10 +4,13 @@ import tempfile
 
 from jaime.diagnostics import (
     DIAGNOSTICS_SCHEMA,
+    K8S_DIAGNOSTICS_CAPS,
+    K8S_MAX_LOG_PATTERN_CHARS,
     build_prompt,
     make_empty_plan,
     read_diagnostics_file,
     validate_diagnostics,
+    validate_k8s_diagnostics,
     write_diagnostics_file,
 )
 
@@ -345,3 +348,75 @@ class TestWriteReadDiagnosticsFile:
             assert result is None
         finally:
             os.unlink(path)
+
+
+class TestValidateK8sDiagnostics:
+    """The keyed-by-application Kubernetes plan (TASKS 4.6)."""
+
+    def test_valid_full_plan_returns_empty_errors(self):
+        plan = {
+            "postgresql-k8s": {
+                "containers": ["postgresql"],
+                "log_patterns": ["FATAL", "out of memory"],
+                "env_variables": ["PGDATA"],
+                "ports": [{"port": 5432, "protocol": "tcp"}],
+            },
+        }
+        assert validate_k8s_diagnostics(plan) == []
+
+    def test_empty_plan_is_valid(self):
+        assert validate_k8s_diagnostics({}) == []
+        assert validate_k8s_diagnostics({"app": {}}) == []
+
+    def test_not_an_object_returns_error(self):
+        assert validate_k8s_diagnostics("nope") == ["diagnostics must be a JSON object"]
+        assert validate_k8s_diagnostics([]) == ["diagnostics must be a JSON object"]
+
+    def test_application_value_must_be_an_object(self):
+        errors = validate_k8s_diagnostics({"app": "nope"})
+        assert any("'app' must be a JSON object" in e for e in errors)
+
+    def test_unknown_keys_are_rejected(self):
+        errors = validate_k8s_diagnostics({"app": {"container": ["x"]}})
+        assert any("unknown keys" in e and "container" in e for e in errors)
+
+    def test_string_list_wrong_type(self):
+        assert any(
+            "must be a list" in e
+            for e in validate_k8s_diagnostics({"app": {"containers": "nope"}})
+        )
+
+    def test_string_list_items_must_be_non_empty_strings(self):
+        errors = validate_k8s_diagnostics({"app": {"env_variables": ["OK", "", 7]}})
+        assert any("env_variables[1]" in e for e in errors)
+        assert any("env_variables[2]" in e for e in errors)
+
+    def test_over_cap_is_an_error(self):
+        errors = validate_k8s_diagnostics(
+            {"app": {"containers": [f"c{i}" for i in range(K8S_DIAGNOSTICS_CAPS["containers"] + 1)]}}
+        )
+        assert any("containers" in e and "max" in e for e in errors)
+
+    def test_too_many_applications(self):
+        plan = {f"app{i}": {} for i in range(K8S_DIAGNOSTICS_CAPS["applications"] + 1)}
+        assert any("too many applications" in e for e in validate_k8s_diagnostics(plan))
+
+    def test_bad_regex_is_an_error(self):
+        errors = validate_k8s_diagnostics({"app": {"log_patterns": ["(unclosed"]}})
+        assert any("not a valid regex" in e for e in errors)
+
+    def test_log_pattern_too_long(self):
+        errors = validate_k8s_diagnostics(
+            {"app": {"log_patterns": ["x" * (K8S_MAX_LOG_PATTERN_CHARS + 1)]}}
+        )
+        assert any("exceeds" in e for e in errors)
+
+    def test_port_must_be_an_integer(self):
+        errors = validate_k8s_diagnostics({"app": {"ports": [{"port": "5432"}]}})
+        assert any("port' must be an integer" in e for e in errors)
+
+    def test_port_protocol_is_restricted(self):
+        errors = validate_k8s_diagnostics(
+            {"app": {"ports": [{"port": 5432, "protocol": "sctp"}]}}
+        )
+        assert any("protocol' must be 'tcp' or 'udp'" in e for e in errors)

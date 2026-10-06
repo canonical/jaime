@@ -3,6 +3,7 @@
 import datetime
 import json
 import os
+import re
 
 DIAGNOSTICS_SCHEMA = {
     "type": "object",
@@ -171,6 +172,128 @@ def validate_diagnostics(plan):
                     errors.append(f"monitoring_plan.health_commands[{i}] missing 'command'")
 
     return errors
+
+
+# Item-count caps for the Kubernetes plan (TASKS 4.6). Validation enforces
+# them; the collector does not truncate, so an over-cap plan is rejected
+# rather than silently collected in part.
+K8S_DIAGNOSTICS_CAPS = {
+    "applications": 50,
+    "containers": 10,
+    "log_patterns": 10,
+    "env_variables": 50,
+    "ports": 20,
+}
+K8S_MAX_LOG_PATTERN_CHARS = 200
+_K8S_PLAN_KEYS = ("containers", "log_patterns", "env_variables", "ports")
+
+
+def validate_k8s_diagnostics(plan):
+    """Validate a Kubernetes diagnostics plan against the k8s schema.
+
+    Unlike the machine plan this is not a file: it is a JSON object keyed by
+    application name, each value a k8s-scoped plan. Only what the Kubernetes
+    API can observe without exec is allowed (container selection, log
+    patterns, env variable names, declared ports).
+
+    Returns a list of error strings. An empty list means valid.
+    """
+    if not isinstance(plan, dict):
+        return ["diagnostics must be a JSON object"]
+
+    errors = []
+    if len(plan) > K8S_DIAGNOSTICS_CAPS["applications"]:
+        errors.append(
+            f"too many applications: {len(plan)} "
+            f"(max {K8S_DIAGNOSTICS_CAPS['applications']})"
+        )
+
+    for app, cfg in plan.items():
+        if not isinstance(cfg, dict):
+            errors.append(f"'{app}' must be a JSON object")
+            continue
+
+        unknown = [k for k in cfg if k not in _K8S_PLAN_KEYS]
+        if unknown:
+            errors.append(
+                f"'{app}' has unknown keys: {', '.join(sorted(unknown))}"
+            )
+
+        _validate_string_list(
+            cfg, app, "containers", K8S_DIAGNOSTICS_CAPS["containers"], errors
+        )
+        _validate_string_list(
+            cfg, app, "env_variables", K8S_DIAGNOSTICS_CAPS["env_variables"], errors
+        )
+        _validate_log_patterns(cfg, app, errors)
+        _validate_k8s_ports(cfg, app, errors)
+
+    return errors
+
+
+def _validate_string_list(cfg, app, key, cap, errors):
+    """Validate an optional list-of-non-empty-strings field and its cap."""
+    if key not in cfg:
+        return
+    value = cfg[key]
+    if not isinstance(value, list):
+        errors.append(f"'{app}.{key}' must be a list")
+        return
+    if len(value) > cap:
+        errors.append(f"'{app}.{key}' has {len(value)} items (max {cap})")
+    for i, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            errors.append(f"'{app}.{key}[{i}]' must be a non-empty string")
+
+
+def _validate_log_patterns(cfg, app, errors):
+    """Validate log_patterns: strings, bounded length, compilable regexes."""
+    if "log_patterns" not in cfg:
+        return
+    patterns = cfg["log_patterns"]
+    if not isinstance(patterns, list):
+        errors.append(f"'{app}.log_patterns' must be a list")
+        return
+    cap = K8S_DIAGNOSTICS_CAPS["log_patterns"]
+    if len(patterns) > cap:
+        errors.append(f"'{app}.log_patterns' has {len(patterns)} items (max {cap})")
+    for i, pattern in enumerate(patterns):
+        if not isinstance(pattern, str):
+            errors.append(f"'{app}.log_patterns[{i}]' must be a string")
+            continue
+        if len(pattern) > K8S_MAX_LOG_PATTERN_CHARS:
+            errors.append(
+                f"'{app}.log_patterns[{i}]' exceeds "
+                f"{K8S_MAX_LOG_PATTERN_CHARS} characters"
+            )
+            continue
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            errors.append(f"'{app}.log_patterns[{i}]' is not a valid regex: {e}")
+
+
+def _validate_k8s_ports(cfg, app, errors):
+    """Validate the ports list: {port: int, protocol: tcp|udp}."""
+    if "ports" not in cfg:
+        return
+    ports = cfg["ports"]
+    if not isinstance(ports, list):
+        errors.append(f"'{app}.ports' must be a list")
+        return
+    cap = K8S_DIAGNOSTICS_CAPS["ports"]
+    if len(ports) > cap:
+        errors.append(f"'{app}.ports' has {len(ports)} items (max {cap})")
+    for i, port in enumerate(ports):
+        if not isinstance(port, dict):
+            errors.append(f"'{app}.ports[{i}]' must be an object")
+            continue
+        number = port.get("port")
+        if isinstance(number, bool) or not isinstance(number, int):
+            errors.append(f"'{app}.ports[{i}].port' must be an integer")
+        protocol = port.get("protocol", "tcp")
+        if protocol not in ("tcp", "udp"):
+            errors.append(f"'{app}.ports[{i}].protocol' must be 'tcp' or 'udp'")
 
 
 def build_prompt(principal_name):

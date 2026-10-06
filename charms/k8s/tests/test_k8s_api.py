@@ -388,3 +388,95 @@ class TestContainerDetail:
         assert init["name"] == "init-db"
         assert init["state"] == "terminated"
         assert init["exit_code"] == "0"
+
+
+_PLAN_POD = {
+    "metadata": {"name": "app-0", "annotations": {"unit.juju.is/id": "app/0"}},
+    "spec": {
+        "containers": [
+            {"name": "charm", "image": "charm:1"},
+            {
+                "name": "workload",
+                "image": "app:1",
+                "env": [
+                    {"name": "PGDATA", "value": "/var/lib/pg"},
+                    {"name": "PGPORT", "valueFrom": {"secretKeyRef": {"name": "s", "key": "p"}}},
+                ],
+                "ports": [{"containerPort": 5432, "protocol": "tcp"}],
+            },
+        ],
+    },
+    "status": {
+        "phase": "Running",
+        "containerStatuses": [
+            {"name": "charm", "restartCount": 0, "state": {"running": {}}},
+            {"name": "workload", "restartCount": 0, "state": {"running": {}}},
+        ],
+    },
+}
+
+
+class TestCollectContextPlan:
+    """The keyed-by-application diagnostics plan (TASKS 4.6)."""
+
+    def _ctx(self, plan=None, logs=None):
+        with mock.patch("jaime.collector.K8sApiClient") as mock_cls:
+            client = mock_cls.return_value
+            client.get_pod_for_unit.return_value = _PLAN_POD
+            client.get_pod_logs.return_value = logs or []
+            client.get_pod_events.return_value = []
+            client.get_resource_usage.return_value = []
+            ctx = collect_context("app/0", diagnostics_plan=plan)
+            return ctx, client
+
+    def test_no_plan_emits_no_plan_results(self):
+        ctx, _ = self._ctx()
+        assert ctx["plan_results"] == {}
+
+    def test_container_selection_restricts_logs(self):
+        ctx, client = self._ctx(plan={"containers": ["workload"]})
+        # Only the selected container is fetched; charm is skipped.
+        assert client.get_pod_logs.call_count == 1
+        assert client.get_pod_logs.call_args.kwargs["container"] == "workload"
+
+    def test_missing_container_is_reported(self):
+        ctx, client = self._ctx(plan={"containers": ["pgbouncer"]})
+        items = ctx["plan_results"]["plan_containers"]["items"]
+        assert items == [{"name": "pgbouncer", "status": "not found"}]
+        assert client.get_pod_logs.call_count == 0
+
+    def test_found_container_marked_found(self):
+        ctx, _ = self._ctx(plan={"containers": ["workload", "charm"]})
+        items = ctx["plan_results"]["plan_containers"]["items"]
+        assert {i["name"]: i["status"] for i in items} == {
+            "workload": "found",
+            "charm": "found",
+        }
+
+    def test_log_patterns_retain_matching_lines(self):
+        logs = ["noise", "FATAL out of memory", "more noise"]
+        ctx, _ = self._ctx(plan={"log_patterns": ["FATAL"]}, logs=logs)
+        assert "FATAL out of memory" in ctx["unit_logs"]
+
+    def test_env_set_and_unset_without_values(self):
+        ctx, _ = self._ctx(plan={"env_variables": ["PGDATA", "PGPORT", "MISSING"]})
+        items = ctx["plan_results"]["env_variables"]["items"]
+        assert items == [
+            {"name": "PGDATA", "status": "set"},
+            {"name": "PGPORT", "status": "set"},
+            {"name": "MISSING", "status": "unset"},
+        ]
+        assert "/var/lib/pg" not in repr(ctx)
+
+    def test_ports_declared_and_missing(self):
+        ctx, _ = self._ctx(
+            plan={"ports": [
+                {"port": 5432, "protocol": "tcp"},
+                {"port": 6432, "protocol": "tcp"},
+            ]}
+        )
+        items = ctx["plan_results"]["network_ports"]["items"]
+        assert items == [
+            {"port": 5432, "protocol": "tcp", "status": "declared"},
+            {"port": 6432, "protocol": "tcp", "status": "not declared"},
+        ]

@@ -19,7 +19,7 @@ Jaime is currently designed as an **observe-first machine subordinate charm**. T
 | `max-context-lines` | int | `500` | Per-item cap on collected lines. Some sections apply a tighter cap (for example socket statistics and firewall rules). This is not a report or prompt total. |
 | `report-dir` | string | `/var/log/jaime/reports` | Directory where Markdown or JSON report artifacts are written. |
 | `audit-log-path` | string | `/var/log/jaime/events.jsonl` | Path to the structured JSONL audit log. |
-| `diagnostics` | string | empty | Machine only. JSON monitoring plan; empty means generate one via AI on relation-joined. |
+| `diagnostics` | string | empty | Substrate-specific JSON diagnostics plan. Machine: host-shaped, empty means generate one via AI on relation-joined. Kubernetes: keyed by application name, empty means fixed pod collection. |
 | `watch-applications` | string | empty | Applications whose co-located units to watch, in addition to the always-watched principal. `*` means every co-located unit. |
 | `juju-api-user` | string | empty | Juju user with `read` on the model, used for the controller API. Required only when `watch-applications` is non-empty. |
 | `juju-api-password` | secret | empty | Password for `juju-api-user`; a Juju secret URI (`secret:<id>`) or a plain string (development only). Never logged. |
@@ -297,12 +297,36 @@ password is never written to logs, audit events, reports or AI prompts.
 
 ## `diagnostics`
 
-Machine only. A JSON monitoring plan describing what to collect (log files,
-processes, environment variables, network ports, systemd units, health
+A JSON diagnostics plan. The intended format differs per substrate.
+
+**Machine subordinate.** A plan describing what to collect on the host (log
+files, processes, environment variables, network ports, systemd units, health
 commands). When empty, Jaime attempts to generate a plan via AI on
 relation-joined, and falls back to an empty plan if no provider is configured.
+The schema is `DIAGNOSTICS_SCHEMA` in `jaime-package/jaime/diagnostics.py`.
 
-The schema lives in the charm's `diagnostics.py`.
+**Kubernetes standalone.** An object keyed by application name. Each value may
+set `containers`, `log_patterns`, `env_variables` and `ports`, checked against
+what the Kubernetes API can observe without exec into the workload:
+
+```json
+{
+  "postgresql-k8s": {
+    "containers": ["postgresql"],
+    "log_patterns": ["FATAL", "out of memory"],
+    "env_variables": ["PGDATA", "POSTGRES_PASSWORD"],
+    "ports": [{"port": 5432, "protocol": "tcp"}]
+  }
+}
+```
+
+`containers` restricts which containers are collected (all by default) and
+reports any named container the pod lacks. `log_patterns` keeps matching lines
+in addition to the error/warning filter. `env_variables` checks names only;
+values are never collected. `ports` checks that a port is declared in the pod
+spec, not that anything is listening. When empty, the fixed pod collection is
+used. An invalid plan blocks the unit. The validator is
+`validate_k8s_diagnostics` in `jaime-package/jaime/diagnostics.py`.
 
 ## Phase-1 recommended config
 

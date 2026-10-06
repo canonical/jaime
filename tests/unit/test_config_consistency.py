@@ -5,8 +5,8 @@ one repository and share most configuration, but nothing stopped their option
 definitions from drifting apart. They already had — see TASKS 4.4.
 
 The intersection of the two option sets is computed rather than hardcoded, so a
-key that moves into the shared set (for example `diagnostics` when 4.6 lands) is
-covered automatically without editing this file.
+key that moves into the shared set is covered automatically; only a
+description that is legitimately substrate-specific needs allowlisting below.
 """
 
 import pathlib
@@ -24,7 +24,12 @@ _CONFIGS = {
 # watches applications across the model namespace. Their wording is
 # substrate-specific on purpose, so description equality is not asserted.
 # Adding a key here needs a stated reason.
-_SUBSTRATE_SPECIFIC = {"juju-api-user", "watch-applications"}
+#
+# `diagnostics` is shared by name but not by format: the machine plan is
+# host-shaped and AI-generated on relation-joined (a file), while the k8s plan
+# is keyed by application and only covers what the Kubernetes API can observe
+# without exec. Same type and default, deliberately different descriptions.
+_SUBSTRATE_SPECIFIC = {"juju-api-user", "watch-applications", "diagnostics"}
 
 
 def _options(substrate: str) -> dict:
