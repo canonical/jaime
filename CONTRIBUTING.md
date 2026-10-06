@@ -16,7 +16,8 @@ Where these conflict, `ARCHITECTURE.md` wins.
 If a change is not covered by an open item in `TASKS.md`, open an issue first so
 scope can be agreed before you write code.
 
-See `README.md` for build, test and deployment instructions.
+See `docs/operations.md` for build and test instructions, and
+`docs/install-machine.md` / `docs/install-k8s.md` for deployment.
 
 ## Legal
 

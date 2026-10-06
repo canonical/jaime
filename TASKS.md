@@ -520,17 +520,39 @@ requirements and the task checklist.
 
 - [ ] Agree the change, then implement per its `tasks.md`
 
-### 4.10. Documentation accuracy
+### 4.10. Documentation structure
 
-The acceptance tests in `ARCHITECTURE.md` and the reference pages under `docs/`
-have drifted from the shipped charms. Nothing links to `docs/` from any other
-file, which is why it rots unnoticed.
+The README had grown to 443 lines and duplicated the config reference, the
+action reference, the install steps and the roadmap. Split it: a short landing
+page, `docs/` for people and CharmHub how-to, and the root files for agents.
+Tasks live in `TASKS.md` and per-change specs under `specs/`; the roadmap lives
+in `ARCHITECTURE.md`; neither is repeated elsewhere.
 
-- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`. It does not mention the option at all, so 4.3's headline feature has no end-to-end check
-- [ ] [test] Fix step 8 of the Kubernetes acceptance test. It still says empty report sections indicate missing RBAC, which 4.2 replaced with a blocked status
-- [ ] [docs] Rewrite `docs/actions.md`. It documents one of the eight shipped actions, and is wrong about what `diagnose` returns
-- [ ] [docs] Link `docs/` from `README.md` and `CONTRIBUTING.md`, so the reference pages are reachable and drift is noticed
-- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`, which appears under both Changes and Features
+- [x] [docs] Create `docs/README.md` as the documentation index
+- [x] [docs] Move the machine install content into `docs/install-machine.md`
+- [x] [docs] Move the Kubernetes install content into `docs/install-k8s.md`
+- [x] [docs] Move the incident flow, modes, monitoring scope, diagnostics-plan concept, troubleshooting and development notes into `docs/operations.md`
+- [x] [docs] Rewrite `README.md` as a landing page: what Jaime is, the two quickstarts, and links. No config tables, action lists, testing, building, modes or roadmap
+- [x] [docs] Point `CONTRIBUTING.md` at the docs pages; keep build and test notes out of the README
+- [x] [docs] Keep the `docs/config.md` and `docs/actions.md` names, and leave their content for 4.11
+- [x] [docs] Leave the charm `README.md` files in place; CharmHub uses them as the store page
+
+### 4.11. Documentation accuracy and acceptance tests
+
+The reference pages drifted from the shipped charms: `docs/config.md` still
+describes a phase-1 machine-only charm, and `docs/actions.md` documents two of
+the actions. Fix the content, add a guard so it cannot drift again, and correct
+the acceptance tests.
+
+- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`; the option has no end-to-end check
+- [ ] [test] Fix step 8 of the Kubernetes acceptance test: empty report sections no longer indicate missing RBAC, which is now a blocked status
+- [ ] [docs] Rewrite `docs/config.md` for both charms: `mode` includes `suggest` and the blocked `act`; `api-token` is a string (secret URI or plain); per-substrate `diagnostics` and `watch-applications`; remove the phase-1 language and the "Phase-1 recommended config" heading
+- [ ] [docs] Rewrite `docs/actions.md` for every action on both charms, with parameters and result keys, and correct `diagnose`
+- [ ] [docs] Fix obvious factual errors in the charm `README.md` files while keeping their structure, since they are public on CharmHub
+- [ ] [test] Add a docs-consistency test: every action in `charms/*/actions.yaml` appears in `docs/actions.md`, every option in `charms/*/config.yaml` appears in `docs/config.md`, and relative links in `README.md` and `docs/` resolve
+- [ ] [docs] Fix the `# Jaimie Roadmap` typo in `ARCHITECTURE.md`
+- [ ] [docs] Audit `ARCHITECTURE.md` for statements duplicated elsewhere and remove them, keeping it the single concept and roadmap source
+- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
