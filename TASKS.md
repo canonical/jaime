@@ -689,3 +689,11 @@ the output (4.5) does not address it.
       output size
 - [ ] [test] Rejected commands never execute; accepted commands are bounded
 - [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
+
+## Ideas
+
+Unscoped and not committed. Each idea is specified under `specs/` before it is
+implemented.
+
+- [ ] [project] Run only the docs checks for docs-only changes, instead of the
+      full pipeline. Spec: `specs/261006-change-docs-only-ci/`
