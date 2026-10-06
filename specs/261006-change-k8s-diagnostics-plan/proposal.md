@@ -1,7 +1,7 @@
 # Proposal: Kubernetes diagnostics plan
 
 Type: change
-Status: proposed
+Status: done
 
 Tracks `TASKS.md` 4.6. Gates the 0.1.0 CharmHub release (5.3).
 

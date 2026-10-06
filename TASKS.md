@@ -437,17 +437,17 @@ is a per-item cap tightened per section, not a report total.
 
 ### 4.6. Kubernetes diagnostics plan
 
-The k8s charm takes no diagnostics plan: `collect_context` ignores its
-`diagnostics_plan` argument and `charms/k8s/config.yaml` has no `diagnostics`
-option. Full parity with the machine plan is not achievable without exec into
-workload containers, so this is scoped to an operator-supplied, k8s-specific
-plan (container selection, log patterns, env names, ports). AI plan generation
-is deferred. Gates the CharmHub release.
+The k8s charm previously took no diagnostics plan: `collect_context` ignored
+its `diagnostics_plan` argument and `charms/k8s/config.yaml` had no
+`diagnostics` option. Full parity with the machine plan is not achievable
+without exec into workload containers, so this was scoped to an
+operator-supplied, k8s-specific plan (container selection, log patterns, env
+names, ports); AI plan generation is deferred. Gates the CharmHub release.
 
 Specified in `specs/261006-change-k8s-diagnostics-plan/`: proposal, design,
 requirements and the task checklist.
 
-- [ ] Agree the change, then implement per its `tasks.md`
+- [x] Agree the change, then implement per its `tasks.md`
 
 ### 4.7. Monitoring transparency
 

@@ -31,5 +31,5 @@
 - [x] [docs] `docs/config.md`: k8s `diagnostics` reference with an example
 - [x] [project] Regenerate examples if the report changes (`make examples`)
       (no change: the example carries no k8s plan)
-- [ ] [project] On merge: set `Status: done` in `proposal.md` and update the
+- [x] [project] On merge: set `Status: done` in `proposal.md` and update the
       descriptive sections of `ARCHITECTURE.md`, `TASKS.md` 4.6 and `CHANGELOG.md`

@@ -80,7 +80,7 @@ jaime-package/jaime/        shared code
   principal.py              StatusTracker — persisted per-unit observations
   report.py                 Markdown report generation
   suggest.py                prompt building, response parsing, suggest/act engine
-  diagnostics.py            diagnostics plan schema, validation, persistence
+  diagnostics.py            diagnostics plan schema, validation (machine + k8s), persistence
   controller.py             Juju controller API client (used by the k8s charm)
   logging.py, logutils.py   JSONL audit log, log filtering/de-duplication
   providers/                base, gemini, openrouter
@@ -647,7 +647,8 @@ Incident tracker
 Context collector
   machine ├── plan-driven (log files, processes, systemd units, network, env vars)
           └── background (Juju logs, disk, memory, sockets, firewall, charm config)
-  k8s     ├── pod (logs per container, events, metrics, pod summary)
+  k8s     ├── plan-driven (containers, log patterns, env names, declared ports)
+          ├── pod (logs per container, events, metrics, pod summary)
           └── Juju config via Application.Get
         ↓
 Filter / de-duplicate / compact
@@ -661,6 +662,13 @@ On the machine substrate a diagnostics plan feeds the collector. It is generated
 once on `principal-relation-joined` — either from the `diagnostics` config option
 or by asking the AI provider — and written to `/var/lib/jaime/diagnostics.json`.
 `config-changed` does not regenerate it.
+
+On the Kubernetes substrate the same `diagnostics` option holds an
+operator-written plan keyed by application name, read from config at collection
+time (no file, no AI generation). It selects which containers are collected,
+adds log patterns, checks env variable names and reports whether plan ports are
+declared in the pod spec. An invalid plan blocks the unit; without a plan, pod
+collection is unchanged.
 
 Optional:
 
