@@ -12,7 +12,8 @@ stated boundary. That is the same trigger as the `ARCHITECTURE.md`-first rule in
 
 `TASKS.md` owns phase order and the release milestone and links to the spec. The
 spec owns the detail and holds the only checklist; do not duplicate it in
-`TASKS.md`.
+`TASKS.md`. A task with a spec collapses to a single roll-up checkbox in
+`TASKS.md`; a task without a spec keeps its checklist there.
 
 ## Layout
 
