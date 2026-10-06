@@ -61,6 +61,7 @@ def generate_report(
     plan_results = context.get("plan_results", {})
 
     _append_section_summary(lines, workload, context, plan_results, status_message)
+    _append_section_plan_containers(lines, plan_results)
     _append_section_network(lines, plan_results)
     _append_section_ss_connections(lines, context)
     _append_section_firewall_rules(lines, context)
@@ -273,12 +274,30 @@ def _append_section_network(lines: list[str], plan_results: dict) -> None:
             port = item.get("port", "")
             protocol = item.get("protocol", "tcp")
             status = item.get("status", "")
-            icon = "✓" if status == "listening" else "✗"
+            # The machine plan reports whether a port is listening; the k8s
+            # plan can only report that it is declared in the pod spec. Both
+            # are a pass, but the printed status keeps the distinction.
+            icon = "✓" if status in ("listening", "declared") else "✗"
             _append(lines, [f"- `{port}/{protocol}` → {status} {icon}"])
     else:
         raw_lines = section.get("lines", [])
         if raw_lines:
             _append(lines, ["## Network ports", "```", *raw_lines, "```"])
+
+
+def _append_section_plan_containers(lines: list[str], plan_results: dict) -> None:
+    section = plan_results.get("plan_containers")
+    if not section or section["type"] != "plan":
+        return
+
+    _append(lines, ["## Plan containers"])
+    for item in section.get("items", []):
+        name = item.get("name", "")
+        status = item.get("status", "")
+        if status == "found":
+            _append(lines, [f"- `{name}` → found ✓"])
+        else:
+            _append(lines, [f"- `{name}` → not found ✗"])
 
 
 def _append_section_env(lines: list[str], plan_results: dict) -> None:

@@ -87,3 +87,12 @@ options:
     type: string
     description: "Path to the structured JSONL audit log."
     default: /var/log/jaime/events.jsonl
+  diagnostics:
+    type: string
+    description: >
+      JSON diagnostics plan keyed by application name. Each application's value
+      may set 'containers', 'log_patterns', 'env_variables' and 'ports' to
+      check the pod against what the Kubernetes API can observe without exec.
+      Empty means no plan and the fixed pod collection is used. An invalid
+      plan blocks the unit. See the k8s schema in jaime-package/jaime/diagnostics.py.
+    default: ""

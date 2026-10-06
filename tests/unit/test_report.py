@@ -532,3 +532,50 @@ class TestCharmConfigCap:
         config_yaml = f"options:\n{options}\n"
         report = _render(tmp_path, {"charm_config": {"config_yaml": config_yaml}})
         assert "more options omitted" in report
+
+
+class TestDeclaredPorts:
+    """Kubernetes plans check declaration, not liveness (TASKS 4.6)."""
+
+    def test_declared_port_is_a_pass_with_distinct_wording(self, tmp_path):
+        context = {"plan_results": {"network_ports": {"type": "plan", "items": [
+            {"port": 5432, "protocol": "tcp", "status": "declared"},
+            {"port": 6432, "protocol": "tcp", "status": "not declared"},
+        ]}}}
+        report = _render(tmp_path, context)
+        assert "`5432/tcp` → declared ✓" in report
+        assert "`6432/tcp` → not declared ✗" in report
+        assert "listening" not in report
+
+    def test_listening_still_renders(self, tmp_path):
+        context = {"plan_results": {"network_ports": {"type": "plan", "items": [
+            {"port": 5432, "protocol": "tcp", "status": "listening"},
+        ]}}}
+        report = _render(tmp_path, context)
+        assert "`5432/tcp` → listening ✓" in report
+
+    def test_broad_network_lines_still_render(self, tmp_path):
+        """Regression guard: the plan branch must not swallow the broad one."""
+        context = {"plan_results": {"network_ports": {
+            "type": "broad",
+            "lines": ["LISTEN 0 128 0.0.0.0:5432"],
+        }}}
+        report = _render(tmp_path, context)
+        assert "## Network ports" in report
+        assert "0.0.0.0:5432" in report
+
+
+class TestPlanContainersSection:
+    def test_renders_found_and_not_found(self, tmp_path):
+        context = {"plan_results": {"plan_containers": {"type": "plan", "items": [
+            {"name": "postgresql", "status": "found"},
+            {"name": "pgbouncer", "status": "not found"},
+        ]}}}
+        report = _render(tmp_path, context)
+        assert "## Plan containers" in report
+        assert "`postgresql` → found ✓" in report
+        assert "`pgbouncer` → not found ✗" in report
+
+    def test_absent_when_no_plan(self, tmp_path):
+        report = _render(tmp_path, {"plan_results": {}})
+        assert "## Plan containers" not in report

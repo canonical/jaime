@@ -10,6 +10,7 @@ Unlike the machine subordinate, this charm:
 """
 
 import datetime
+import json
 import logging
 
 from ops.charm import CharmBase
@@ -26,8 +27,10 @@ from jaime.controller import (
     parse_agent_conf,
 )
 from jaime.core import CoreMixin
+from jaime.diagnostics import validate_k8s_diagnostics
 from jaime.incident import Incident
 from jaime.k8s_api import K8sApiClient
+from jaime.logging import write_event
 from jaime.principal import StatusTracker
 
 logger = logging.getLogger(__name__)
@@ -62,9 +65,53 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         super()._on_config_changed(event)
         if isinstance(self.unit.status, BlockedStatus):
             return
+        plan, diag_error = self._parse_diagnostics_config()
+        if diag_error:
+            self.unit.status = BlockedStatus(f"invalid diagnostics config: {diag_error}")
+            write_event({
+                "event": "diagnostics-config-invalid",
+                "unit": self.unit.name,
+                "error": diag_error,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }, self.model.config.get("audit-log-path", ""))
+            return
+        if plan:
+            unknown = sorted(set(plan) - set(self._watch_applications()))
+            if unknown:
+                logger.debug(
+                    "diagnostics plan for unmonitored applications ignored: %s",
+                    ", ".join(unknown),
+                )
         prereq = self._prerequisite_error()
         if prereq:
             self.unit.status = BlockedStatus(prereq)
+
+    def _parse_diagnostics_config(self) -> tuple[dict | None, str | None]:
+        """Return (plan, error) for the keyed k8s diagnostics config.
+
+        ``plan`` is the parsed object keyed by application name, or ``None``
+        when the option is empty or invalid. ``error`` is the first validation
+        error, or ``None``. Kept separate from collection so an invalid plan
+        fails safe instead of reaching the collector.
+        """
+        raw = self.model.config.get("diagnostics", "")
+        if not raw:
+            return None, None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            return None, f"not valid JSON: {e}"
+        errors = validate_k8s_diagnostics(parsed)
+        if errors:
+            return None, errors[0]
+        return parsed, None
+
+    def _app_diagnostics_plan(self, app_name: str) -> dict | None:
+        """Return the plan for one application, or None when it has none."""
+        plan, _ = self._parse_diagnostics_config()
+        if not plan:
+            return None
+        return plan.get(app_name)
 
     def _watch_applications(self) -> list[str]:
         raw = self.model.config.get("watch-applications", "")
@@ -156,6 +203,13 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
     def _monitor(self):
         """Fetch statuses and drive the incident lifecycle for each unit."""
+        # An invalid diagnostics plan blocks before anything else, so
+        # update-status cannot overwrite the blocked state with "Ready".
+        _, diag_error = self._parse_diagnostics_config()
+        if diag_error:
+            self.unit.status = BlockedStatus(f"invalid diagnostics config: {diag_error}")
+            return
+
         # Prerequisites first, whether or not anything is monitored: the charm
         # must not report ready while the controller, RBAC, or Kubernetes API
         # is in a bad state. Only after that does opt-out apply.
@@ -320,6 +374,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
         context = collect_context(
             unit_name, log_window, max_lines, from_time=since_dt,
+            diagnostics_plan=self._app_diagnostics_plan(unit_name.split("/")[0]),
         )
         app_name = unit_name.split("/")[0]
         context["juju_config"] = self._fetch_app_config(app_name)
@@ -335,6 +390,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
             since_dt = None
         context = collect_context(
             unit_name, log_window, max_lines, from_time=since_dt,
+            diagnostics_plan=self._app_diagnostics_plan(unit_name.split("/")[0]),
         )
         app_name = unit_name.split("/")[0]
         context["juju_config"] = self._fetch_app_config(app_name)
