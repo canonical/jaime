@@ -78,8 +78,8 @@ body when the reason is not obvious from the diff.
 - Add or update tests for behaviour you change. Code in `jaime-package/` must
   stay testable without Juju.
 - Update `CHANGELOG.md`, and `TASKS.md` if you complete or discover a task.
-- All CI checks must pass: lint, the three unit suites, packing, and the machine
-  integration suite.
+- All CI checks must pass: lint, the docs checks (codespell and mdformat), the
+  three unit suites, packing, and the machine integration suite.
 - State your assumptions in the PR description. If several readings of the
   requirement exist, say which you chose.
 

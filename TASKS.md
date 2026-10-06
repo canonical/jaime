@@ -553,6 +553,8 @@ the acceptance tests.
 - [ ] [docs] Fix the `# Jaimie Roadmap` typo in `ARCHITECTURE.md`
 - [ ] [docs] Audit `ARCHITECTURE.md` for statements duplicated elsewhere and remove them, keeping it the single concept and roadmap source
 - [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`
+- [x] [test] Add documentation CI checks: `codespell` for spelling across the repository, and `mdformat --check` for `README.md` and `docs/`
+- [x] [test] Add `tox -e docs` and a `make test-docs` target so the checks run locally
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 

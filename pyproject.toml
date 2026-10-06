@@ -24,6 +24,12 @@ markers = [
 [tool.coverage.run]
 source = ["jaime-package"]
 
+[tool.codespell]
+# Generated and vendored trees are not prose. Skipping them keeps a false
+# positive in machine output (for example the generated example report) from
+# failing the docs check.
+skip = "*.charm,dist,examples,node_modules,.venv,.tox,.git,.coding_sessions"
+
 [tool.ruff]
 # 120 matches the width this codebase already writes to. Chosen deliberately
 # over the more common 100 so enabling the rule does not require rewrapping

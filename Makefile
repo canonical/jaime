@@ -19,7 +19,7 @@ K8S_CHARM     = jaime-k8s_$(JAIME_BASE)-$(JAIME_ARCH).charm
 # Principal application the machine subordinate relates to.
 PRINCIPAL_CHARM ?= $(JAIME_PRINCIPAL_CHARM)
 
-.PHONY: help lint test test-shared test-machine test-k8s \
+.PHONY: help lint test-docs test test-shared test-machine test-k8s \
         pack pack-all pack-machine pack-k8s \
         integration integration-machine integration-k8s \
         examples clean distclean check-principal deploy deploy-k8s remove remove-k8s
@@ -31,6 +31,7 @@ help:
 	@echo "  make test-machine  - Run the machine charm suite"
 	@echo "  make test-k8s      - Run the k8s charm suite"
 	@echo "  make lint          - Run ruff over the repository"
+	@echo "  make test-docs     - Check docs spelling and Markdown formatting"
 	@echo "  make examples      - Regenerate examples/ from the report generator"
 	@echo "  make integration   - Integration tests (needs a Juju controller)"
 	@echo "  make pack-machine  - Pack the machine subordinate charm into $(DIST_DIR)/"
@@ -65,6 +66,10 @@ test-k8s:
 
 lint:
 	ruff check .
+
+test-docs:
+	codespell .
+	mdformat --check README.md docs/
 
 examples:
 	@if [ -x .venv/bin/python ]; then .venv/bin/python scripts/generate_examples.py; \

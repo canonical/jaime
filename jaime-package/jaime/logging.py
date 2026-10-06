@@ -72,7 +72,7 @@ def list_incidents(audit_log_path: str = "", unit: str = "") -> list[dict]:
     still open — are reported with ``status: open``.
 
     Tolerates a missing or partially malformed log: a missing file yields an
-    empty list and unparseable lines are skipped rather than aborting the read.
+    empty list and unparsable lines are skipped rather than aborting the read.
     ``unit`` filters the result to incidents whose events carry that unit name.
     """
     path = audit_log_path or _DEFAULT_AUDIT_LOG_PATH
