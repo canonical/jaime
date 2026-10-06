@@ -41,3 +41,17 @@ Applying redaction to already-redacted output SHALL NOT change it.
 #### Scenario: second pass
 - **WHEN** a redacted report is passed through the redactor again
 - **THEN** the output is byte-identical
+
+### Requirement: Every report and prompt path is covered
+
+The `generate-report` and `get-suggestion` actions SHALL operate on the redacted
+report, so neither surfaces a secret from the collected evidence.
+
+#### Scenario: regenerated report
+- **WHEN** `generate-report` runs for an open incident
+- **THEN** the regenerated report is redacted before it is written
+
+#### Scenario: suggestion from the report
+- **WHEN** `get-suggestion` builds a prompt for an incident
+- **THEN** it reads the redacted report artifact
+- **AND** the prompt contains no secret from the collected evidence

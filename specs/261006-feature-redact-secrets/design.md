@@ -10,6 +10,16 @@ cleans both. Rejected:
   and the prompt path would still need its own pass.
 - **Redact only the prompt.** Leaves the persisted report on disk with secrets.
 
+Both report-producing and prompt-consuming paths go through this point. The
+`generate-report` action re-collects context and calls `generate_report`, so the
+regenerated file is redacted; `get-suggestion`, and the incident path, read that
+file back before building the prompt. A cached suggestion is returned without a
+provider call and was generated from a redacted report.
+
+Reports written before this change, and suggestions cached before it, are not
+retroactively scrubbed. They are replaced on the next `generate-report` or new
+incident.
+
 ## Decision 2: two layers
 
 - **Structured, name-aware redaction** for config values. A secret with no
@@ -70,6 +80,8 @@ dates) are unchanged.
 | value already `[REDACTED]` | unchanged (idempotent) |
 | ordinary UUID / SHA / path / version | unchanged |
 | secret in both the summary and the full config section | both redacted |
+| a report written before this change | not retroactively scrubbed; replaced on the next `generate-report` or new incident |
+| a suggestion cached before this change | returned as-is; regenerated when the model or context hash changes |
 
 ## Non-goals
 
