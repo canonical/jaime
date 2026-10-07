@@ -1,0 +1,8 @@
+# mdformat configuration.
+#
+# `number = true` keeps ordered lists numbered 1. 2. 3. instead of normalising
+# every item to `1.`, which is valid CommonMark but unreadable in the docs.
+# `wrap = "keep"` leaves existing paragraph wrapping alone, so adopting the
+# formatter does not reflow prose.
+number = true
+wrap = "keep"

@@ -30,6 +30,28 @@ jobs:
       - name: ruff check
         run: ruff check --output-format=github .
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install docs tools
+        run: pip install codespell mdformat
+
+      # Spelling is checked across the repository; formatting only for the
+      # human-facing docs, since the agent-facing root files keep their own
+      # established style.
+      - name: codespell
+        run: codespell .
+
+      - name: mdformat
+        run: mdformat --check README.md docs/
+
   unit:
     name: Unit (${{ matrix.suite.name }})
     runs-on: ubuntu-latest
@@ -73,8 +95,8 @@ jobs:
     name: Pack charms
     runs-on: ubuntu-latest
     # Packing needs LXD and is far slower than the unit suites, so it only
-    # runs once linting and every unit suite are green.
-    needs: [lint, unit]
+    # runs once linting, the docs checks and every unit suite are green.
+    needs: [lint, docs, unit]
     steps:
       - uses: actions/checkout@v7
 

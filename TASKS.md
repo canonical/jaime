@@ -553,6 +553,8 @@ the acceptance tests.
 - [ ] [docs] Fix the `# Jaimie Roadmap` typo in `ARCHITECTURE.md`
 - [ ] [docs] Audit `ARCHITECTURE.md` for statements duplicated elsewhere and remove them, keeping it the single concept and roadmap source
 - [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`
+- [x] [test] Add documentation CI checks: `codespell` for spelling across the repository, and `mdformat --check` for `README.md` and `docs/`
+- [x] [test] Add `tox -e docs` and a `make test-docs` target so the checks run locally
 
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
@@ -687,3 +689,11 @@ the output (4.5) does not address it.
       output size
 - [ ] [test] Rejected commands never execute; accepted commands are bounded
 - [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
+
+## Ideas
+
+Unscoped and not committed. Each idea is specified under `specs/` before it is
+implemented.
+
+- [ ] [project] Run only the docs checks for docs-only changes, instead of the
+      full pipeline. Spec: `specs/261006-change-docs-only-ci/`
