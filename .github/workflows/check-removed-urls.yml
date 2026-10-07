@@ -30,7 +30,7 @@ jobs:
         with:
           repository: canonical/sphinx-stack
           path: sphinx-stack
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
       - name: Build docs
         run: |
           for dir in compare base; do
