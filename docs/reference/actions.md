@@ -1,8 +1,9 @@
 # Actions
 
 This document describes the Juju actions exposed by **Jaime — Juju AI Medic Engine**.
-It is a reference to the most recently added actions; `docs/config.md` and the
-charm `actions.yaml` files remain the full source of truth for every action.
+It is a reference to the most recently added actions; the [configuration
+reference](configuration.md) and the charm `actions.yaml` files remain the full
+source of truth.
 
 For phase-1, Jaime exposed only one action, `diagnose`; both charms have since
 gained the incident lifecycle and AI-suggestion actions. All actions are
