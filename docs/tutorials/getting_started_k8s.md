@@ -6,8 +6,9 @@ the **Juju controller API**; pod logs, events and metrics come from the
 **Kubernetes API** through the pod's in-cluster service account (no `kubectl`
 binary).
 
-For every option see the [configuration reference](config.md); for the actions
-see the [actions reference](actions.md).
+For every option see the
+[configuration reference](../reference/configuration.md); for the actions
+see the [actions reference](../reference/actions.md).
 
 The application **must** be named `jaime-k8s`: the shipped RoleBinding names that
 ServiceAccount.

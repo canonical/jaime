@@ -16,8 +16,10 @@ Where these conflict, `ARCHITECTURE.md` wins.
 If a change is not covered by an open item in `TASKS.md`, open an issue first so
 scope can be agreed before you write code.
 
-See `docs/operations.md` for build and test instructions, and
-`docs/install-machine.md` / `docs/install-k8s.md` for deployment.
+See `docs/index.md` for the documentation index. The `docs/` tree follows the
+Diataxis structure (tutorials, how-to guides, reference, explanation); the
+how-to guides cover build and test instructions, and the tutorials cover
+deployment.
 
 ## Legal
 

@@ -77,10 +77,9 @@ Full guide: [Installing on Kubernetes](docs/install-k8s.md).
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Configuration reference](docs/config.md)
-- [Actions reference](docs/actions.md)
-- [Operations](docs/operations.md)
+- [Documentation index](docs/index.md)
+- [Configuration reference](docs/reference/configuration.md)
+- [Actions reference](docs/reference/actions.md)
 - [Architecture](ARCHITECTURE.md)
 - [Contributing](CONTRIBUTING.md)
 

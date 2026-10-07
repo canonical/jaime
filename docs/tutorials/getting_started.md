@@ -4,8 +4,9 @@ Jaime's machine variant is a subordinate charm: it runs alongside a principal
 machine charm and reads the host directly. This page covers deployment, the
 optional AI diagnosis, and monitoring other units on the same host.
 
-For every option see the [configuration reference](config.md); for the actions
-see the [actions reference](actions.md).
+For every option see the
+[configuration reference](../reference/configuration.md); for the actions
+see the [actions reference](../reference/actions.md).
 
 ## Deploy
 
@@ -79,4 +80,8 @@ credentials put the charm in a blocked state.
 A machine subordinate monitors only units on **its own host**. Its collectors
 read the local machine, so a report about a unit elsewhere would carry this
 host's diagnostics. Cover more machines by relating Jaime to more principals.
-See [Operations](operations.md) for the full scope and its limits.
+A machine subordinate monitors only units on **its own host**. Its collectors
+read the local machine, so a report about a unit elsewhere would carry this
+host's diagnostics. Cover more machines by relating Jaime to more principals.
+See [Scope and host boundary](../explanation/scope_and_host_boundary.md) for the
+full scope and its limits.

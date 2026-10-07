@@ -13,7 +13,7 @@ links:
   contact:
     - ljupcho.vangelski@canonical.com
     - gaetan.gouzi@canonical.com
-  documentation: https://github.com/canonical/jaime
+  documentation: https://canonical-jaime-charm.readthedocs-hosted.com
   issues:
     - https://github.com/canonical/jaime/issues
   source:
