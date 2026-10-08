@@ -10,8 +10,8 @@ Ordering note: 5.1 (CI) runs ahead of Phase 4 because it is cheap and guards
 every change after it. 5.2 depends on 4.1, since integration tests cannot
 deploy reliably until packaging stops destroying artifacts. 5.3 depends on
 4.2, 4.4 and 4.6. 4.10 (documentation) runs last in Phase 4, before the 0.1.0
-release, so `docs/actions.md` and the acceptance tests describe the shipped
-surface rather than a stale one.
+release, so `docs/reference/actions.md` and the acceptance tests describe the
+shipped surface rather than a stale one.
 
 ## 0. Phase 0 — Repository bootstrap
 
@@ -25,7 +25,7 @@ surface rather than a stale one.
 
 ## 1. Phase 1 — Machine Observe
 
-Deploy Jaimie as a machine subordinate charm. Detect unhealthy principal units, collect diagnostics, and generate structured incident reports without modifying the environment.
+Deploy Jaime as a machine subordinate charm. Detect unhealthy principal units, collect diagnostics, and generate structured incident reports without modifying the environment.
 Only logic for `observe` mode is added at this phase.
 
 ### 1.1. Charm skeleton
@@ -539,20 +539,17 @@ in `ARCHITECTURE.md`; neither is repeated elsewhere.
 
 ### 4.11. Documentation accuracy and acceptance tests
 
-The reference pages drifted from the shipped charms: `docs/config.md` still
-describes a phase-1 machine-only charm, and `docs/actions.md` documents two of
-the actions. Fix the content, add a guard so it cannot drift again, and correct
+The reference pages had drifted from the shipped charms, and the Read the Docs
+migration moved them under `docs/reference/`. Correct the content, the links and
 the acceptance tests.
 
-- [ ] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`; the option has no end-to-end check
-- [ ] [test] Fix step 8 of the Kubernetes acceptance test: empty report sections no longer indicate missing RBAC, which is now a blocked status
-- [ ] [docs] Rewrite `docs/config.md` for both charms: `mode` includes `suggest` and the blocked `act`; `api-token` is a string (secret URI or plain); per-substrate `diagnostics` and `watch-applications`; remove the phase-1 language and the "Phase-1 recommended config" heading
-- [ ] [docs] Rewrite `docs/actions.md` for every action on both charms, with parameters and result keys, and correct `diagnose`
-- [ ] [docs] Fix obvious factual errors in the charm `README.md` files while keeping their structure, since they are public on CharmHub
-- [ ] [test] Add a docs-consistency test: every action in `charms/*/actions.yaml` appears in `docs/actions.md`, every option in `charms/*/config.yaml` appears in `docs/config.md`, and relative links in `README.md` and `docs/` resolve
-- [ ] [docs] Fix the `# Jaimie Roadmap` typo in `ARCHITECTURE.md`
-- [ ] [docs] Audit `ARCHITECTURE.md` for statements duplicated elsewhere and remove them, keeping it the single concept and roadmap source
-- [ ] [docs] Remove the duplicated OpenRouter model entry in `CHANGELOG.md`
+- [x] [docs] Rewrite `docs/reference/configuration.md` for both charms: `mode` includes `suggest` and the blocked `act`; `api-token`/`juju-api-password` are strings (secret URI or plain); per-substrate `diagnostics`, `watch-applications` and `juju-api-*`; `max-context-lines` is a per-item cap; correct report file names and audit event example; remove the phase-1 language
+- [x] [docs] Rewrite `docs/reference/actions.md` for every action on both charms, with parameters and result keys, and correct `diagnose`
+- [x] [test] Add `watch-applications` steps to the machine acceptance test in `ARCHITECTURE.md`
+- [x] [test] Fix step 8 of the Kubernetes acceptance test: missing RBAC is a blocked status, not empty report sections
+- [x] [docs] Fix the `# Jaimie Roadmap` typo and the stale facts in `ARCHITECTURE.md`: `diagnostics` is not machine-only, and the Kubernetes action list omitted `show-setup-steps`
+- [x] [docs] Fix the broken links in `README.md` and the duplicated paragraph in `docs/tutorials/getting_started.md`
+- [x] [docs] Complete the action lists in both charm `README.md` files
 - [x] [test] Add documentation CI checks: `codespell` for spelling across the repository, and `mdformat --check` for `README.md` and `docs/`
 - [x] [test] Add `tox -e docs` and a `make test-docs` target so the checks run locally
 
@@ -652,6 +649,7 @@ this task automates subsequent releases.
 - [ ] [python] Write `incident-recovered` event to the audit log on recovery (debug log only today)
 - [ ] [python] Include suggested manual next steps
 - [ ] [test] Add fake provider for AI tests
+- [ ] [docs] De-duplicate `ARCHITECTURE.md`: trim the sections `docs/` now owns for operators (Config, Juju actions, Audit events, Modes, Workload status source, Report structure, AI usage) to a concept plus a link, keeping it the single design and roadmap source
 
 ## 7. Phase 7 — Clustered operation for machine charms
 
@@ -688,7 +686,7 @@ the output (4.5) does not address it.
 - [ ] [python] Enforce the policy in `validate_diagnostics` and bound the command
       output size
 - [ ] [test] Rejected commands never execute; accepted commands are bounded
-- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/config.md`
+- [ ] [docs] Document the policy in `ARCHITECTURE.md` and `docs/reference/configuration.md`
 
 ## Ideas
 
@@ -697,3 +695,6 @@ implemented.
 
 - [ ] [project] Run only the docs checks for docs-only changes, instead of the
       full pipeline. Spec: `specs/261006-change-docs-only-ci/`
+- [ ] [test] Add a documentation link check: relative links in `README.md`, the
+      other root Markdown files and `docs/` must resolve (the README had two
+      broken links after the Read the Docs move)

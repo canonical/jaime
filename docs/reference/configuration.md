@@ -2,122 +2,87 @@
 
 This document describes the Juju charm configuration options for **Jaime — Juju AI Medic Engine**.
 
-Jaime is currently designed as an **observe-first machine subordinate charm**. The phase-1 MVP should detect unhealthy principal charm states, collect local diagnostic context, and generate structured incident information. It should not remediate or mutate the host unless a future task explicitly adds that behaviour.
+Jaime ships as a machine subordinate charm (`jaime`) and a Kubernetes
+standalone charm (`jaime-k8s`). It observes workloads, collects bounded
+diagnostics once a unit becomes unhealthy, and writes a Markdown incident
+report with structured audit events. It never remediates. Options are shared
+unless marked otherwise, and the defaults below match the shipped `config.yaml`
+files.
 
 ## Summary
 
 | Config | Type | Default | Description |
 |---|---:|---|---|
-| `mode` | string | `observe` | Controls whether Jaime only observes or may later act. For phase-1, only `observe` is implemented. |
-| `provider` | string | `none` | AI provider to use for optional report generation. For phase-1 this may be `none` or a stub. |
-| `model` | string | empty | AI model name used by the selected provider. Not required for non-AI reports. |
-| `api-token` | secret | empty | Juju secret containing the provider API token. Must never be logged. |
-| `watch-statuses` | string | `error,blocked` | Comma-separated principal unit statuses that should open an incident. |
-| `failure-timeout-minutes` | int | `5` | How long a watched status must persist before a report is generated. |
-| `cooldown-minutes` | int | `30` | Minimum time before generating another report for the same unresolved incident. |
-| `log-window-minutes` | int | `30` | How far back Jaime should collect recent logs. |
-| `max-context-lines` | int | `500` | Per-item cap on collected lines. Some sections apply a tighter cap (for example socket statistics and firewall rules). This is not a report or prompt total. |
-| `report-dir` | string | `/var/log/jaime/reports` | Directory where Markdown or JSON report artifacts are written. |
+| `mode` | string | `observe` | `observe`, `suggest`, or `act` (blocked). |
+| `provider` | string | `none` | AI provider: `none`, `gemini`, or `openrouter`. |
+| `model` | string | empty | Model for the selected provider; empty uses the provider default. |
+| `api-token` | string | empty | AI token, as a Juju secret URI (`secret:<id>`) or a plain string. Never logged. |
+| `watch-statuses` | string | `error,blocked` | Unit workload statuses that open an incident. |
+| `failure-timeout-minutes` | int | `5` | How long a watched status must persist before an incident opens. |
+| `cooldown-minutes` | int | `30` | Minimum time before another report for the same unresolved incident. |
+| `log-window-minutes` | int | `30` | How far back to collect recent logs. |
+| `max-context-lines` | int | `500` | Per-item cap on collected lines, tightened per section. Not a report or prompt total. |
+| `report-dir` | string | `/var/log/jaime/reports` | Directory where Markdown reports are written. |
 | `audit-log-path` | string | `/var/log/jaime/events.jsonl` | Path to the structured JSONL audit log. |
-| `diagnostics` | string | empty | Substrate-specific JSON diagnostics plan. Machine: host-shaped, empty means generate one via AI on relation-joined. Kubernetes: keyed by application name, empty means fixed pod collection. |
-| `watch-applications` | string | empty | Applications whose co-located units to watch, in addition to the always-watched principal. `*` means every co-located unit. |
-| `juju-api-user` | string | empty | Juju user with `read` on the model, used for the controller API. Required only when `watch-applications` is non-empty. |
-| `juju-api-password` | secret | empty | Password for `juju-api-user`; a Juju secret URI (`secret:<id>`) or a plain string (development only). Never logged. |
+| `diagnostics` | string | empty | Substrate-specific JSON diagnostics plan. |
+| `watch-applications` | string | empty | Applications to monitor in addition to the machine charm's principal. |
+| `juju-api-user` | string | empty | Juju user with `read` on the model, used for the controller API. |
+| `juju-api-password` | string | empty | Password for `juju-api-user`, as a Juju secret URI or a plain string. Never logged. |
 
 ## `mode`
 
 Controls Jaime's operating mode.
 
-Allowed values:
-
-- `observe`
-- `act` — reserved for a later phase
-
-Default:
-
-```yaml
-mode: observe
-```
-
-Phase-1 behaviour:
-
-- `observe` only
-- no remediation
-- no host mutation
-- collect state
-- write structured logs
-- generate diagnostic output
-
-`act` should be documented but not implemented until remediation has explicit safety rules, allowlists, tests, and acceptance criteria.
+- `observe` (default): collect context, write reports and audit events. On the
+  machine charm the AI provider is still used once, to generate the diagnostics
+  plan when the principal relation is joined.
+- `suggest`: as observe, plus a diagnosis. Jaime sends the already-written report
+  to the provider and attaches the root-cause description and one suggested
+  command to the incident, retrievable with `get-suggestion`. Nothing is
+  executed.
+- `act`: not implemented. Setting it blocks the charm; no command is ever
+  executed.
 
 ## `provider`
 
 Selects the AI provider for optional report generation.
 
-Suggested values:
-
-- `none`
+- `none` (default): no provider. Jaime still produces a non-AI report from
+  collected evidence.
 - `gemini`
-- `openai`
-
-Default:
-
-```yaml
-provider: none
-```
-
-Phase-1 should work without any AI provider configured. In that case Jaime should still produce a non-AI diagnostic report from local state and logs.
+- `openrouter`
 
 ## `model`
 
-The model name to use with the configured provider.
+The model to use with the selected provider. Any model the provider supports is
+accepted. When empty, a provider default is used:
 
-Example:
+| Provider | Default model |
+|---|---|
+| `gemini` | `gemini-2.5-flash` |
+| `openrouter` | `~deepseek/deepseek-v4-flash-latest` |
 
-```yaml
-model: gemini-2.5-flash
-```
-
-For phase-1 this may be unused if `provider=none`.
+Ignored when `provider` is `none`.
 
 ## `api-token`
 
-The API token for the configured AI provider. The recommended approach is to
-store the token as a Juju secret so it is never exposed in `juju config` output
-or operator logs.
-
-**Recommended — Juju secret (production):**
+The API token for the configured provider. The recommended form is a Juju
+secret, so the token never appears in `juju config` output:
 
 ```bash
-# Store the token once
 SECRET_URI=$(juju add-secret jaime-token token=<TOKEN>)
-
-# Grant access to the application
-juju grant-secret jaime-token jaime
-
-# Set the config to the secret URI
-juju config jaime api-token="${SECRET_URI}"
+juju grant-secret jaime-token <application>
+juju config <application> api-token="${SECRET_URI}"
 ```
 
-Jaime reads the `token` field from the secret content. The secret URI starts
-with `secret:` and is safe to store in config.
-
-**Development only — plain string:**
-
-```bash
-juju config jaime api-token="<TOKEN>"
-```
-
-Plain strings are accepted for convenience during local development, but the
-token will be visible in `juju config jaime` output. Do not use this in
-production.
-
-The token is never written to Juju logs, JSONL audit logs, Markdown reports,
-or AI prompts.
+Jaime reads the `token` field from the secret content. A plain string is
+accepted for local development only, and is visible in `juju config` output. The
+token is never written to logs, audit events, reports or AI prompts.
 
 ## `watch-statuses`
 
-Comma-separated list of principal unit statuses that Jaime should monitor.
+Comma-separated unit workload statuses that open an incident. Units on either
+substrate are matched.
 
 Default:
 
@@ -125,23 +90,12 @@ Default:
 watch-statuses: error,blocked
 ```
 
-Recommended phase-1 values:
-
-```yaml
-watch-statuses: error,blocked
-```
-
-Later values may include:
-
-```yaml
-watch-statuses: error,blocked,waiting,maintenance,unknown
-```
-
-For phase-1, `waiting` and `maintenance` should usually be ignored because they can be normal during deployment, relation setup, upgrades, or restarts.
+`waiting` and `maintenance` are usually left out: they are normal during
+deployment, relation setup, upgrades and restarts.
 
 ## `failure-timeout-minutes`
 
-How long the principal unit must remain in a watched status before Jaime generates a report.
+How long a unit must remain in a watched status before an incident opens.
 
 Default:
 
@@ -149,16 +103,14 @@ Default:
 failure-timeout-minutes: 5
 ```
 
-Example behaviour:
-
-1. Principal becomes `error`.
-2. Jaime records an `incident_started` event.
-3. If the principal recovers before the timeout, Jaime records `incident_recovered`.
-4. If the principal is still unhealthy after the timeout, Jaime collects diagnostic context and generates a report.
+When the timeout elapses, Jaime opens an incident (an `incident-start` audit
+event), collects bounded context and writes a report. A unit that recovers
+before the timeout does not open an incident.
 
 ## `cooldown-minutes`
 
-Prevents duplicate reports for the same unresolved incident.
+Prevents another report for the same unresolved incident from being generated
+too soon, for example when `update-status` runs every few minutes.
 
 Default:
 
@@ -166,13 +118,10 @@ Default:
 cooldown-minutes: 30
 ```
 
-Example:
-
-If `update-status` runs every 5 minutes, Jaime should not call the AI provider or regenerate a full report every time while the same incident remains unresolved.
-
 ## `log-window-minutes`
 
-How far back recent logs should be collected.
+How far back recent logs are collected (unit logs, journal and workload service
+logs on the machine charm; pod and container logs on Kubernetes).
 
 Default:
 
@@ -180,16 +129,11 @@ Default:
 log-window-minutes: 30
 ```
 
-This should be used when collecting logs from sources such as:
-
-- Juju unit logs
-- systemd journal
-- principal workload service logs
-- local host diagnostics
-
 ## `max-context-lines`
 
-Maximum number of lines to include in the compact context bundle.
+Per-item cap on collected lines. Some sections apply a tighter cap, for example
+socket statistics and firewall rules. It is not a report or prompt total; the
+report keeps the bounded evidence, and prompt projection is a later concern.
 
 Default:
 
@@ -197,93 +141,76 @@ Default:
 max-context-lines: 500
 ```
 
-This protects against:
-
-- excessive report size
-- excessive AI provider cost
-- context-window overflow
-- leaking too much unrelated log data
-
 ## `report-dir`
 
-Directory where report artifacts are written.
-
-Default:
-
-```yaml
-report-dir: /var/log/jaime/reports
-```
-
-Reports should be written with predictable incident IDs, for example:
+Directory where Markdown reports are written, one file per incident, named after
+the incident id:
 
 ```text
-/var/log/jaime/reports/incident-20260621-153000-postgresql-0.md
-/var/log/jaime/reports/incident-20260621-153000-postgresql-0.context.json
+/var/log/jaime/reports/<incident-id>.md
 ```
+
+Default: `/var/log/jaime/reports`.
 
 ## `audit-log-path`
 
-Path to the structured JSONL audit log.
+Path to the structured JSONL audit log, one JSON object per line.
 
-Default:
+Default: `/var/log/jaime/events.jsonl`.
 
-```yaml
-audit-log-path: /var/log/jaime/events.jsonl
-```
-
-Each line should be one JSON object.
-
-Example event:
+A representative `incident-start` event:
 
 ```json
-{"timestamp":"2026-06-21T15:30:00Z","event":"incident_started","principal_unit":"postgresql/0","status":"error","message":"principal unit entered watched status"}
+{"event":"incident-start","unit":"postgresql/0","workload":"error","status_message":"database is not ready","first_seen":"2026-06-21T15:30:00+00:00","status_since":"2026-06-21T15:25:00+00:00","incident_id":"...","timestamp":"2026-06-21T15:30:00+00:00"}
 ```
+
+`list-incidents` correlates `incident-start`, `report-generated` and
+`incident-closed` events by incident id.
 
 ## `watch-applications`
 
-Comma-separated application names whose units on **this machine** should be
-watched, in addition to the principal.
+Applications to monitor **in addition to** what the charm watches by default.
+The reach differs per substrate.
 
-The machine charm always watches its related principal, whatever this option
-says: relating the subordinate is the opt-in. An empty value therefore watches
-the principal only, opens no controller connection and needs no credentials.
+On the machine charm the related principal is always monitored, whatever this
+option says. Other units are matched only on the **same host**:
 
-| Value | Watches |
-|---|---|
-| empty (default) | the principal only |
-| `app1,app2` | the principal, plus any co-located units of those applications |
-| `*` | the principal, plus every co-located unit |
+| Value | Monitors | Credentials |
+|---|---|---|
+| `""` (default) | the principal only | not needed |
+| `app1,app2` | the principal, plus co-located units of those applications | required |
+| `*` | the principal, plus every co-located unit | required |
 
-Reach is bounded to units on the same machine, because the collectors read the
-local host. A report about a unit elsewhere would carry this machine's disk,
-memory, processes and firewall rules as evidence, so units on other machines
-are never reported on.
+On the Kubernetes charm there is no principal relation: monitoring is opt-in,
+there is no `*`, and the reach is any application in the model's namespace:
 
-A configured application with no unit on this machine is skipped silently. The
-unit status names what is monitored, so absence from that list is the signal.
+| Value | Monitors | Credentials |
+|---|---|---|
+| `""` (default) | nothing | not needed, but the charm is not usable |
+| `app1,app2` | those applications | required |
+
+A configured application that cannot be reached is skipped on the machine charm
+and blocks the Kubernetes charm with a clear status.
 
 ## `juju-api-user`
 
-Name of a Juju user with `read` permission on this model. The controller API
-checks workload status, but a unit's own agent identity does not have the
-`ModelRead` permission that `Client.FullStatus` requires, so a dedicated user
-is needed.
-
-Required only when `watch-applications` is non-empty.
+Name of a Juju user with `read` permission on the model, used to read workload
+statuses through the controller API. A unit's own agent identity lacks the
+`ModelRead` permission that `Client.FullStatus` requires.
 
 ```bash
 juju add-user jaime-observer
 juju grant jaime-observer read <model-name>
 ```
 
-When the value is empty and `watch-applications` is set, the charm reports a
-blocked status. Credentials rejected by the controller are also blocked, while
-a temporarily unreachable controller is reported as maintenance.
+The Kubernetes charm always requires it. The machine charm requires it only when
+`watch-applications` is non-empty; with it, the principal's status message is
+also captured.
 
 ## `juju-api-password`
 
 Password for `juju-api-user`. As with `api-token`, the recommended form is a
-Juju secret.
+Juju secret:
 
 ```bash
 SECRET_URI=$(juju add-secret jaime-juju-api password=<PASSWORD>)
@@ -292,12 +219,12 @@ juju config jaime juju-api-password="${SECRET_URI}"
 ```
 
 Jaime reads the `password` field from the secret content. A plain string is
-accepted for local development but will be visible in `juju config` output. The
+accepted for local development but is visible in `juju config` output. The
 password is never written to logs, audit events, reports or AI prompts.
 
 ## `diagnostics`
 
-A JSON diagnostics plan. The intended format differs per substrate.
+A JSON diagnostics plan. The format differs per substrate.
 
 **Machine subordinate.** A plan describing what to collect on the host (log
 files, processes, environment variables, network ports, systemd units, health
@@ -345,7 +272,7 @@ strings, so commit SHAs, UUIDs and versions are left intact. The audit log and
 the persisted `status-state.json` are not redacted; do not put secrets in a
 workload status message.
 
-## Phase-1 recommended config
+## Example configuration
 
 ```yaml
 mode: observe

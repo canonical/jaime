@@ -39,7 +39,7 @@ juju run jaime/0 get-suggestion
 ```
 
 `generate-report` and `get-suggestion` act on the current open incident, and fail
-if there is none. Full guide: [Installing on a machine](docs/install-machine.md).
+if there is none. Full guide: [Installing on a machine](docs/tutorials/getting_started.md).
 
 ## Quickstart: Kubernetes
 
@@ -73,7 +73,7 @@ juju run jaime-k8s/0 generate-report
 juju run jaime-k8s/0 get-suggestion
 ```
 
-Full guide: [Installing on Kubernetes](docs/install-k8s.md).
+Full guide: [Installing on Kubernetes](docs/tutorials/getting_started_k8s.md).
 
 ## Documentation
 

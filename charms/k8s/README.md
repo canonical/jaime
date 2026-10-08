@@ -32,6 +32,7 @@ juju run jaime-k8s/0 show-setup-steps
 ```bash
 juju run jaime-k8s/0 show-setup-steps     # Print the exact setup steps
 juju run jaime-k8s/0 show-status          # Monitoring state
+juju run jaime-k8s/0 show-usage           # LLM token usage and cost per model
 juju run jaime-k8s/0 generate-report      # Report for the open incident
 juju run jaime-k8s/0 get-suggestion       # AI diagnosis for the open incident
 juju run jaime-k8s/0 list-incidents       # Incident list from the audit log
