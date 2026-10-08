@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jaime"
-version = "0.0.7"
+version = "0.1.0"
 description = "Jaime - Juju AI Medic Engine (machine subordinate)"
 requires-python = ">=3.10"
 dependencies = [

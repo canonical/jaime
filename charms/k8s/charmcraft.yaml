@@ -19,7 +19,7 @@ links:
   source:
     - https://github.com/canonical/jaime
 
-version: "0.0.1"
+version: "0.1.0"
 platforms:
   ubuntu-22.04-amd64:
     build-on:
