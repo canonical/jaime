@@ -18,7 +18,7 @@ links:
   source:
     - https://github.com/canonical/jaime
 
-version: "0.0.7"
+version: "0.1.0"
 requires:
   principal:
     interface: juju-info
