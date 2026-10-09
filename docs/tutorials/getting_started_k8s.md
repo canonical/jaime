@@ -14,7 +14,7 @@ The application **must** be named `jaime-k8s`: the shipped RoleBinding names tha
 ServiceAccount.
 
 ```bash
-juju deploy jaime-k8s --channel 0.1.0/edge
+juju deploy jaime-k8s --channel latest/edge
 ```
 
 ## Run the setup steps

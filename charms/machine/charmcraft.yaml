@@ -74,6 +74,13 @@ parts:
       - icon.svg
     prime:
       - icon.svg
+  readme:
+    plugin: dump
+    source: .
+    stage:
+      - README.md
+    prime:
+      - README.md
 
 analysis:
   ignore:

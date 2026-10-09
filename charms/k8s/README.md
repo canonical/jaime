@@ -17,7 +17,7 @@ account.
 
 ```bash
 # Deploy Jaime k8s from CharmHub (edge, until the first stable release)
-juju deploy jaime-k8s --channel 0.1.0/edge
+juju deploy jaime-k8s --channel latest/edge
 ```
 
 After deploying, Jaime k8s needs a bit of setup to read the Kubernetes API and
