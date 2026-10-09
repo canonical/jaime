@@ -763,10 +763,10 @@ report-dir: /var/log/jaime/reports
 audit-log-path: /var/log/jaime/events.jsonl
 ```
 
-Machine only:
+Both charms, with a substrate-specific format:
 
 ```yaml
-diagnostics: ""                # explicit diagnostics plan; empty means generate via AI
+diagnostics: ""                # machine: host plan (empty means generate via AI); k8s: plan keyed by application
 ```
 
 Shared, but with substrate-specific reach:
@@ -812,6 +812,7 @@ reset
 Kubernetes standalone:
 
 ```text
+show-setup-steps
 generate-report
 get-suggestion [additional-context]
 show-status
@@ -849,6 +850,7 @@ clear-incident
 9. Confirm Jaime writes a Markdown report.
 10. Confirm `get-suggestion` returns a diagnosis and a single command in `suggest` mode.
 11. Confirm Jaime performs no remediation in observe mode.
+12. With observer credentials configured, set `watch-applications` and confirm `show-status` lists the resolved co-located units and the unit status names them.
 
 ### Kubernetes standalone
 
@@ -859,19 +861,17 @@ clear-incident
 5. Set `watch-applications` to the application under test.
 6. Drive the application into a watched status.
 7. Confirm Jaime records the incident start.
-8. Confirm the report contains pod summary, Kubernetes events, and container logs — empty sections indicate missing Kubernetes RBAC.
+8. Confirm the report contains pod summary, Kubernetes events, and container logs. Missing Kubernetes RBAC is reported as a blocked status, not by empty report sections.
 9. Confirm `get-suggestion` returns a diagnosis and a single command in `suggest` mode.
 10. Confirm Jaime performs no remediation in observe mode.
 
-# Jaimie Roadmap
-
-Phases 1 to 3 are implemented. Phases 4 to 7 are planned. The ideas below are unordered and not committed.
+# Jaime Roadmap
 
 Phase order and the active plan live in `TASKS.md`. A change that alters behaviour, an interface, a config option or a stated boundary is specified under `specs/` before it is implemented, where its decisions, requirements and implementation tasks are recorded.
 
 ## Phase 1 – Machine Observe
 
-Deploy Jaimie as a machine subordinate charm. Detect unhealthy principal units, collect diagnostics, and generate structured incident reports without modifying the environment.
+Deploy Jaime as a machine subordinate charm. Detect unhealthy principal units, collect diagnostics, and generate structured incident reports without modifying the environment.
 
 ## Phase 2 – AI-assisted Diagnosis
 
@@ -1074,7 +1074,7 @@ Unordered and not committed. Recorded so the direction is not lost.
 - **Environment hygiene** — detect and safely clean residual resources left behind by charms, applications, or machines, with a focus on reclaiming failed or unprovisioned infrastructure.
 - **Knowledge and support** — generate issue reports, identify known failure patterns, and assist operators with troubleshooting and bug filing.
 - **Local knowledge engine** — learn from previously observed incidents, reports, and remediation outcomes to provide local recommendations without requiring an external AI provider.
-- **Fleet and controller intelligence** — centralized visibility, controller integration, fleet-wide incident analysis, and optional user interfaces for managing multiple Jaimie deployments.
+- **Fleet and controller intelligence** — centralized visibility, controller integration, fleet-wide incident analysis, and optional user interfaces for managing multiple Jaime deployments.
 - **Composite health model** — let workload-health checks open incidents independently of Juju workload status, since a workload can be functionally broken while Juju still reports `active`. See [Health model](#health-model).
 - **Kubernetes state durability** — persist incidents and usage across pod replacement via Juju unit state, which needs no volume, and consider Juju storage or a PVC for generated reports, which are too large for unit state.
 - **External artifact sink** — forward the audit log and reports to Loki or object storage rather than relying on pod-local disk.

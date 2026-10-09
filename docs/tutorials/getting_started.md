@@ -80,8 +80,5 @@ credentials put the charm in a blocked state.
 A machine subordinate monitors only units on **its own host**. Its collectors
 read the local machine, so a report about a unit elsewhere would carry this
 host's diagnostics. Cover more machines by relating Jaime to more principals.
-A machine subordinate monitors only units on **its own host**. Its collectors
-read the local machine, so a report about a unit elsewhere would carry this
-host's diagnostics. Cover more machines by relating Jaime to more principals.
 See [Scope and host boundary](../explanation/scope_and_host_boundary.md) for the
 full scope and its limits.
