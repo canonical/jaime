@@ -57,7 +57,7 @@ is retained on disk for forensics.
 
 ## Troubleshooting
 
-- A configured application with no unit in reach is skipped silently — run
+- A configured application with no unit in reach is skipped silently - run
   `show-status` to see what is actually observed.
 - A blocked Kubernetes charm usually means missing or rejected `juju-api`
   credentials, missing Kubernetes RBAC, or a `watch-applications` name that is

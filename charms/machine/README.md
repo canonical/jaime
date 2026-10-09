@@ -11,8 +11,8 @@ reports only; nothing is changed without explicit operator intent.
 ## Quickstart
 
 ```bash
-# Deploy Jaime from CharmHub
-juju deploy jaime
+# Deploy Jaime from CharmHub (edge, until the first stable release)
+juju deploy jaime --channel 0.1.0/edge
 
 # Deploy a principal charm (e.g. postgresql) and relate it to Jaime
 juju deploy postgresql --channel 16/stable
@@ -25,7 +25,7 @@ juju status
 To update an existing deployment:
 
 ```bash
-juju refresh jaime
+juju refresh jaime --channel 0.1.0/edge
 ```
 
 ## Actions

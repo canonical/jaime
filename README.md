@@ -18,7 +18,7 @@ The diagnostics plan is generated once, when the principal relation is joined.
 Configure the provider before relating if you want an AI-generated plan.
 
 ```bash
-juju deploy jaime
+juju deploy jaime --channel 0.1.0/edge
 juju deploy postgresql --channel 16/stable
 
 # Optional: enable AI-assisted diagnosis now, before relating
@@ -47,7 +47,7 @@ The application must be named `jaime-k8s`. The charm prints the exact setup
 commands for your model:
 
 ```bash
-juju deploy jaime-k8s
+juju deploy jaime-k8s --channel 0.1.0/edge
 juju run jaime-k8s/0 show-setup-steps
 ```
 

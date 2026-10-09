@@ -6,8 +6,8 @@ deliberate.
 ## Machine charm
 
 A machine subordinate monitors only units on **its own host**. Its collectors
-read the local machine — unit logs, `/var/lib/juju/agents`, `df`, `free`,
-`ps`, `ss`, systemd, firewall — so a report about a unit on another machine
+read the local machine - unit logs, `/var/lib/juju/agents`, `df`, `free`,
+`ps`, `ss`, systemd, firewall - so a report about a unit on another machine
 would carry this host's diagnostics. That would be misleading, so Jaime does
 not offer it. Cover more machines by relating Jaime to more principals.
 

@@ -39,5 +39,5 @@ when configuration changes, so a bad token surfaces as a blocked status rather
 than a failed report.
 
 On the machine charm, a provider is also used once to generate the diagnostics
-plan when the principal relation is joined — configure it **before** relating,
+plan when the principal relation is joined - configure it **before** relating,
 or the plan is empty until you remove and re-add the relation.

@@ -1,6 +1,6 @@
 # Configuration
 
-This document describes the Juju charm configuration options for **Jaime — Juju AI Medic Engine**.
+This document describes the Juju charm configuration options for **Jaime - Juju AI Medic Engine**.
 
 Jaime ships as a machine subordinate charm (`jaime`) and a Kubernetes
 standalone charm (`jaime-k8s`). It observes workloads, collects bounded

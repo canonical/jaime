@@ -28,8 +28,8 @@ per unit.
 
 ## Episodes
 
-A unit that flaps between two watched statuses — or re-sets the same status
-with a new message — keeps a **single** incident and a single unhealthy timer.
+A unit that flaps between two watched statuses - or re-sets the same status
+with a new message - keeps a **single** incident and a single unhealthy timer.
 The episode only ends when the unit leaves the watched statuses entirely.
 
 ## Recovery and cooldown
@@ -45,6 +45,6 @@ Every lifecycle event is appended to `audit-log-path` (default
 generated, and incident closed. The full history is queryable through
 `list-incidents`.
 
-`reset` closes every open incident, then **rotates** the audit log — the
+`reset` closes every open incident, then **rotates** the audit log - the
 closed history is archived to `events.jsonl.<timestamp>` and the configured
 path restarts empty.

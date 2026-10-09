@@ -48,7 +48,7 @@ How-to guides
 **Reference**
 ^^^
 
-**Technical information** — configuration, actions, report format
+**Technical information** - configuration, actions, report format
 ```
 
 ```{grid-item-card}

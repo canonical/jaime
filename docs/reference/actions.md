@@ -1,6 +1,6 @@
 # Actions
 
-This reference describes the Juju actions exposed by **Jaime — Juju AI Medic
+This reference describes the Juju actions exposed by **Jaime - Juju AI Medic
 Engine**. The charm `actions.yaml` files remain the source of truth. All actions
 are read-only with respect to the monitored workload.
 
