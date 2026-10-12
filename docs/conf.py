@@ -55,7 +55,7 @@ html_context = {
     # TODO: Change to your product website URL, dropping the 'https://' prefix (e.g.,
     #       'ubuntu.com/lxd'). If there's no such website, remove the {{ product_page }}
     #       link from the _templates/header.html file.
-    "product_page": "https://github.com/canonical/jaime",
+    "product_page": "github.com/canonical/jaime",
     # Product tag image; the orange part of your logo, shown in the page header
     # TODO: To add a tag image, uncomment and update as needed.
     # 'product_tag': '_static/tag.png',
@@ -64,7 +64,7 @@ html_context = {
     "discourse": "",
     # Your Mattermost channel URL
     # TODO: Change to your Mattermost channel URL or leave empty.
-    "mattermost": "https://chat.canonical.com/canonical/channels/fe-teams---worldwide",
+    "mattermost": "",
     # Your Matrix channel URL
     # TODO: Change to your Matrix channel URL or leave empty.
     "matrix": "",
