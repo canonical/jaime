@@ -15,7 +15,7 @@ relation is joined, and `config-changed` does not regenerate it. To get an
 AI-generated plan, configure the provider **before** relating.
 
 ```bash
-juju deploy jaime --channel latest/edge
+juju deploy jaime --channel=0.1/stable
 juju deploy postgresql --channel 16/stable
 
 # Optional: enable AI-assisted diagnosis now, before relating

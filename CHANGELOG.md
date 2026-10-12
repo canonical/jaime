@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-12
+
+Jaime 0.1.1 is a maintenance release and the first published to the
+`0.1/stable` channel. The deploy commands in the READMEs and the tutorials now
+use `--channel=0.1/stable`.
+
+### Changes
+
+- Exclude stale virtual environments (`venv/`, `.venv/`) and stale `*.charm` artifacts from the packed payload via `.charmignore` in both charm trees
+
 ## [0.1.0] - 2026-10-08
 
 Jaime 0.1.0 is the first release to ship both a machine subordinate charm
