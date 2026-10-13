@@ -628,7 +628,9 @@ does not target a fixed public endpoint: `provider-remote-url` must be set to
 the server's OpenAI-compatible root (for example `http://host:11434/v1` for
 Ollama) and is required whenever `provider=remote`. No `Authorization` header
 is sent when `api-token` is empty, so a token-less local server works with no
-secret.
+secret. Setting `provider-remote-url` with `gemini` or `openrouter` blocks the
+charm (it would otherwise be silently ignored); with `provider=none` the value
+is left alone, since no provider is used.
 Ollama and most self-hosted servers report prompt and completion tokens but no
 monetary cost, so `show-usage` records tokens-only for `remote` calls, with
 `cost_usd` left unset.
@@ -772,7 +774,7 @@ mode: observe                  # observe | suggest | act (act is blocked)
 provider: none                 # none | gemini | openrouter | remote
 model: ""                      # defaults to gemini-2.5-flash / ~deepseek/deepseek-v4-flash-latest; remote has no default
 api-token: ""                  # secret:<id> or plain string; optional for remote
-provider-remote-url: ""        # remote only: OpenAI-compatible /v1 root, required when provider=remote
+provider-remote-url: ""        # remote only: OpenAI-compatible /v1 root, required when provider=remote; blocks with gemini/openrouter
 watch-statuses: error,blocked
 failure-timeout-minutes: 5
 cooldown-minutes: 30

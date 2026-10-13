@@ -133,6 +133,12 @@ class TestConfigChanged:
             h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, ActiveStatus)
 
+    def test_provider_remote_url_with_none_provider_is_ignored(self):
+        """provider=none uses no provider, so a leftover URL is not an error."""
+        h = _make_harness({"provider": "none", "provider-remote-url": "http://x:11434/v1"})
+        assert isinstance(h.charm.unit.status, ActiveStatus)
+        assert h.charm.unit.status.message == "Ready"
+
     def test_config_change_preserves_open_incident_status(self):
         """A config change must not overwrite an open incident's status."""
         h = _make_harness({"mode": "observe"})

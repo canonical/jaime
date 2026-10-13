@@ -117,15 +117,16 @@ class CoreMixin:
             )
             return
 
-        # provider-remote-url has exactly one consumer, the remote provider. A
-        # value set with any other provider would be silently ignored, so
-        # surface it as a configuration mistake instead of leaving it unnoticed.
+        # provider-remote-url has exactly one consumer, the remote provider.
+        # Set alongside gemini or openrouter it is a misconfiguration, so
+        # surface it rather than letting it pass unnoticed. With provider=none
+        # it is dead config (no provider is used), so it is left alone.
         remote_url = (
             self.model.config.get("provider-remote-url", "") or ""
         ).strip()
         if remote_url and Provider(
             self.model.config.get("provider", Provider.NONE)
-        ) != Provider.REMOTE:
+        ) in (Provider.GEMINI, Provider.OPENROUTER):
             self.unit.status = BlockedStatus(
                 "provider-remote-url is set but provider is not 'remote'"
             )

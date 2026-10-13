@@ -56,8 +56,9 @@ options:
     description: >
       Base URL of the AI provider endpoint for the 'remote' provider
       (OpenAI-compatible servers only). For Ollama, the OpenAI-compatible root
-      is http://<host>:11434/v1. Required when provider is 'remote'; ignored
-      otherwise.
+      is http://<host>:11434/v1. Required when provider is 'remote'; setting it
+      with 'gemini' or 'openrouter' blocks the unit; ignored when provider is
+      'none'.
     default: ""
   api-token:
     type: string
@@ -65,7 +66,9 @@ options:
       API token for the configured AI provider. Accepts either a Juju secret URI
       (``secret:<id>``, recommended) or a plain token string (for development only).
       When a secret URI is provided, Jaime reads the ``token`` field from the secret
-      content. The token is never logged. To use a secret: run
+      content. The token is never logged. Optional for the 'remote' provider: a
+      local server that does not require authentication works without one. To
+      use a secret: run
       ``juju add-secret jaime-token token=<value>``, grant it to the application,
       then set this field to the returned secret URI.
     default: ""
