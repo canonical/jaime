@@ -40,6 +40,9 @@ options:
   api-token:
     type: string
     default: ""
+  provider-remote-url:
+    type: string
+    default: ""
   watch-statuses:
     type: string
     default: "error,blocked"
@@ -108,6 +111,27 @@ class TestConfigChanged:
             h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, BlockedStatus)
         assert "AI provider error" in h.charm.unit.status.message
+
+    def test_provider_remote_url_with_non_remote_provider_sets_blocked(self):
+        h = _make_harness({"provider": "gemini", "provider-remote-url": "http://x:11434/v1"})
+        assert isinstance(h.charm.unit.status, BlockedStatus)
+        assert (
+            "provider-remote-url is set but provider is not 'remote'"
+            in h.charm.unit.status.message
+        )
+
+    def test_provider_remote_url_with_remote_provider_is_active(self):
+        h = _make_harness({
+            "mode": "suggest",
+            "provider": "remote",
+            "provider-remote-url": "http://x:11434/v1",
+            "model": "qwen2.5:7b",
+        })
+        mock_provider = mock.MagicMock()
+        mock_provider.check.return_value = None
+        with mock.patch.object(h.charm, "_get_ai_provider", return_value=(mock_provider, None)):
+            h.charm._on_config_changed(mock.MagicMock())
+        assert isinstance(h.charm.unit.status, ActiveStatus)
 
     def test_config_change_preserves_open_incident_status(self):
         """A config change must not overwrite an open incident's status."""
@@ -183,6 +207,7 @@ class TestEnums:
         assert Provider.NONE.value == "none"
         assert Provider.GEMINI.value == "gemini"
         assert Provider.OPENROUTER.value == "openrouter"
+        assert Provider.REMOTE.value == "remote"
 
 
 class TestSummariseUsage:
@@ -291,6 +316,44 @@ class TestGetAIProvider:
         charm = self._make({})
         assert charm._default_model("gemini") == "gemini-2.5-flash"
         assert charm._default_model("openrouter") == "~deepseek/deepseek-v4-flash-latest"
+        assert charm._default_model("remote") == ""
+
+    def test_remote_requires_remote_url(self):
+        charm = self._make({"provider": "remote", "model": "llama3.2"})
+        provider, err = charm._get_ai_provider()
+        assert provider is None
+        assert "provider-remote-url is not set" in err
+
+    def test_remote_requires_model(self):
+        charm = self._make({"provider": "remote", "provider-remote-url": "http://h:11434/v1"})
+        provider, err = charm._get_ai_provider()
+        assert provider is None
+        assert "model is not set" in err
+
+    def test_remote_allows_empty_token(self):
+        charm = self._make({
+            "provider": "remote",
+            "provider-remote-url": "http://host:11434/v1",
+            "model": "llama3.2",
+        })
+        provider, err = charm._get_ai_provider()
+        from jaime.providers.remote import RemoteProvider
+        assert isinstance(provider, RemoteProvider)
+        assert err is None
+        assert provider._api_token == ""
+        assert provider._base_url == "http://host:11434/v1"
+        assert provider._model == "llama3.2"
+
+    def test_remote_with_token(self):
+        charm = self._make({
+            "provider": "remote",
+            "provider-remote-url": "http://host:11434/v1",
+            "model": "llama3.2",
+            "api-token": "tok",
+        })
+        provider, err = charm._get_ai_provider()
+        assert err is None
+        assert provider._api_token == "tok"
 
 
 class TestReadyMessage:

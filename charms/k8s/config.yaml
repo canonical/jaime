@@ -39,7 +39,8 @@ options:
     description: >
       AI provider to use for optional report generation. Allowed values:
       'none' (no provider; the charm always produces a non-AI report),
-      'gemini', or 'openrouter'.
+      'gemini', 'openrouter', or 'remote' (any server that speaks the OpenAI
+      Chat Completions protocol, e.g. Ollama; requires 'provider-remote-url').
     default: none
   model:
     type: string
@@ -47,7 +48,16 @@ options:
       AI model to use with the selected provider (optional). Any model the
       provider supports is accepted. When empty, a provider default is used:
       'gemini-2.5-flash' for gemini and '~deepseek/deepseek-v4-flash-latest'
-      for openrouter. Ignored when provider is 'none'.
+      for openrouter. 'remote' has no provider default, so the model must be
+      set (for Ollama, an exact pulled tag). Ignored when provider is 'none'.
+    default: ""
+  provider-remote-url:
+    type: string
+    description: >
+      Base URL of the AI provider endpoint for the 'remote' provider
+      (OpenAI-compatible servers only). For Ollama, the OpenAI-compatible root
+      is http://<host>:11434/v1. Required when provider is 'remote'; ignored
+      otherwise.
     default: ""
   api-token:
     type: string
