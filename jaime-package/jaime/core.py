@@ -40,6 +40,7 @@ class Provider(str, Enum):
     NONE = "none"
     GEMINI = "gemini"
     OPENROUTER = "openrouter"
+    REMOTE = "remote"
 
 
 def summarise_usage(entries: list[dict]) -> dict:
@@ -113,6 +114,21 @@ class CoreMixin:
             valid = ", ".join(p.value for p in Provider)
             self.unit.status = BlockedStatus(
                 f"invalid provider '{self.model.config.get('provider')}', must be one of: {valid}"
+            )
+            return
+
+        # provider-remote-url has exactly one consumer, the remote provider.
+        # Set alongside gemini or openrouter it is a misconfiguration, so
+        # surface it rather than letting it pass unnoticed. With provider=none
+        # it is dead config (no provider is used), so it is left alone.
+        remote_url = (
+            self.model.config.get("provider-remote-url", "") or ""
+        ).strip()
+        if remote_url and Provider(
+            self.model.config.get("provider", Provider.NONE)
+        ) in (Provider.GEMINI, Provider.OPENROUTER):
+            self.unit.status = BlockedStatus(
+                "provider-remote-url is set but provider is not 'remote'"
             )
             return
 
@@ -191,16 +207,30 @@ class CoreMixin:
                 f"mode={self.model.config.get('mode')} but provider is not configured"
             )
 
+        model = self.model.config.get("model", "") or self._default_model(
+            provider_name.value
+        )
+
+        # The remote (OpenAI-compatible) provider has no fixed endpoint and no
+        # provider default model. It also needs no token: local servers such as
+        # Ollama accept unauthenticated calls, so no Authorization header is
+        # sent when api-token is empty.
+        if provider_name == Provider.REMOTE:
+            base_url = (self.model.config.get("provider-remote-url", "") or "").strip()
+            if not base_url:
+                return None, "provider=remote but provider-remote-url is not set"
+            if not model:
+                return None, "provider=remote but model is not set"
+            api_token = self._resolve_api_token()
+            from jaime.providers.remote import RemoteProvider
+            return RemoteProvider(api_token, model, base_url), None
+
         api_token = self._resolve_api_token()
         if not api_token:
             logger.warning(
                 "provider '%s' configured but api-token is empty", provider_name.value
             )
             return None, f"provider={provider_name.value} but api-token is not set"
-
-        model = self.model.config.get("model", "") or self._default_model(
-            provider_name.value
-        )
 
         if provider_name == Provider.GEMINI:
             from jaime.providers.gemini import GeminiProvider

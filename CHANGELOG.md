@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Features
+
+- Add a `remote` provider for any server that speaks the OpenAI Chat Completions protocol (Ollama, llama.cpp, vLLM, LiteLLM). `provider-remote-url` points at the server's `/v1` root and is required with `provider=remote`; `api-token` is optional, with no `Authorization` header sent when it is empty; `remote` has no provider-default model. Setting `provider-remote-url` with `gemini` or `openrouter` blocks the unit
+
 ## [0.1.1] - 2026-10-12
 
 Jaime 0.1.1 is a maintenance release and the first published to the

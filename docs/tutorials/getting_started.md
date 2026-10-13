@@ -30,6 +30,10 @@ For OpenRouter use `provider=openrouter` with the same secret URI. A plain token
 string is accepted for development only; the secret form is recommended and is
 never written to plain config.
 
+For a local OpenAI-compatible server (e.g. Ollama) use `provider=remote`; see
+[Enable AI-assisted diagnosis](../how-to/enable_ai_diagnosis.md) for
+`provider-remote-url` and the no-default `model` requirement.
+
 If the plan came out empty because the provider was configured after relating:
 
 ```bash

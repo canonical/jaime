@@ -1,8 +1,9 @@
 # AI diagnosis
 
-Jaime uses an AI provider (Gemini or OpenRouter) in two places: to generate
-the machine diagnostics plan, and, in `suggest` mode, to diagnose an incident
-from its report. AI output is always advisory.
+Jaime uses an AI provider (Gemini, OpenRouter, or `remote` for a local
+OpenAI-compatible server) in two places: to generate the machine diagnostics
+plan, and, in `suggest` mode, to diagnose an incident from its report. AI
+output is always advisory.
 
 ## Suggest mode
 

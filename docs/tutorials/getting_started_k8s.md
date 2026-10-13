@@ -66,6 +66,11 @@ juju grant-secret jaime-token jaime-k8s
 juju config jaime-k8s mode=suggest provider=gemini api-token="${AI_SECRET}"
 ```
 
+For a local OpenAI-compatible server (e.g. Ollama) use `provider=remote` with
+an exact `model` tag, no `api-token`, and `provider-remote-url` pointing at the
+server's `/v1` root; see
+[Enable AI-assisted diagnosis](../how-to/enable_ai_diagnosis.md).
+
 ### Choose which applications to monitor
 
 Monitoring is **opt-in**: an empty `watch-applications` list monitors nothing.

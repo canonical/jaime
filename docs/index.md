@@ -3,8 +3,9 @@
 **Jaime** is a Juju diagnostic and incident reporting engine. It observes
 charm workloads, waits for a configurable timeout once a unit becomes
 unhealthy, collects bounded diagnostic context, and writes a structured
-Markdown incident report. Optionally, it calls an AI provider (Gemini or
-OpenRouter) to attach a diagnosis suggestion.
+Markdown incident report. Optionally, it calls an AI provider (Gemini,
+OpenRouter, or `remote` for a local OpenAI-compatible server) to attach a
+diagnosis suggestion.
 
 Jaime is available in two variants:
 

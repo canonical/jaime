@@ -14,9 +14,10 @@ files.
 | Config | Type | Default | Description |
 |---|---:|---|---|
 | `mode` | string | `observe` | `observe`, `suggest`, or `act` (blocked). |
-| `provider` | string | `none` | AI provider: `none`, `gemini`, or `openrouter`. |
-| `model` | string | empty | Model for the selected provider; empty uses the provider default. |
-| `api-token` | string | empty | AI token, as a Juju secret URI (`secret:<id>`) or a plain string. Never logged. |
+| `provider` | string | `none` | AI provider: `none`, `gemini`, `openrouter`, or `remote`. |
+| `model` | string | empty | Model for the selected provider; empty uses the provider default. `remote` has no default. |
+| `api-token` | string | empty | AI token, as a Juju secret URI (`secret:<id>`) or a plain string. Never logged. Optional for `remote`. |
+| `provider-remote-url` | string | empty | OpenAI-compatible endpoint root for `remote` (e.g. `http://host:11434/v1`). Required when `provider=remote`; blocks with `gemini`/`openrouter`; ignored with `provider=none`. |
 | `watch-statuses` | string | `error,blocked` | Unit workload statuses that open an incident. |
 | `failure-timeout-minutes` | int | `5` | How long a watched status must persist before an incident opens. |
 | `cooldown-minutes` | int | `30` | Minimum time before another report for the same unresolved incident. |
@@ -51,6 +52,18 @@ Selects the AI provider for optional report generation.
   collected evidence.
 - `gemini`
 - `openrouter`
+- `remote`: any server that speaks the OpenAI Chat Completions protocol
+  (Ollama, llama.cpp, vLLM, LiteLLM). Requires `provider-remote-url`;
+  `api-token` is optional and no `Authorization` header is sent when it is
+  empty.
+
+## `provider-remote-url`
+
+Sets the API root for the `remote` provider. It must point at the server's
+OpenAI-compatible endpoint — for Ollama, `http://<host>:11434/v1`. The charm
+appends `/chat/completions` for generation and `/models` for the connectivity
+check. Setting it with `gemini` or `openrouter` blocks the charm; with
+`provider=none` the value is ignored.
 
 ## `model`
 
@@ -61,6 +74,7 @@ accepted. When empty, a provider default is used:
 |---|---|
 | `gemini` | `gemini-2.5-flash` |
 | `openrouter` | `~deepseek/deepseek-v4-flash-latest` |
+| `remote` | none — the model must be set (for Ollama, an exact pulled tag) |
 
 Ignored when `provider` is `none`.
 

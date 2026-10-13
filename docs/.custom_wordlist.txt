@@ -94,3 +94,9 @@ venv
 rtd
 URIs
 UUIDs
+Ollama
+OpenAI
+llama
+LiteLLM
+vLLM
+

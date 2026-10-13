@@ -41,3 +41,18 @@ juju run jaime-k8s/0 reset                # Clear all incidents
 
 Monitoring is opt-in: configure which applications to watch with
 `watch-applications` (see the documentation).
+
+### Local OpenAI-compatible providers
+
+To use a local server that speaks the OpenAI Chat Completions protocol (e.g.
+Ollama) instead of a hosted provider, configure `provider=remote` with
+`provider-remote-url` and an exact model tag. The charm runs inside its own
+pod, so `provider-remote-url` must be reachable from the pod (a host-side
+Ollama needs `OLLAMA_HOST=0.0.0.0` and a pod-visible address):
+
+```bash
+juju config jaime-k8s mode=suggest provider=remote model=llama3.2 \
+  provider-remote-url=http://<host-ip>:11434/v1
+```
+
+No `api-token` is needed for a token-less local server.
