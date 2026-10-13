@@ -43,3 +43,18 @@ juju run jaime/0 reset                 # Clear all incidents and start fresh
 
 Jaime defaults to **observe** mode. To enable AI-assisted suggestions, see the
 documentation above for configuring `mode`, `provider`, and `api-token`.
+
+### Local OpenAI-compatible providers
+
+To use a local server that speaks the OpenAI Chat Completions protocol (e.g.
+Ollama) instead of a hosted provider, configure `provider=remote` with
+`provider-remote-url` and an exact model tag. The charm runs inside the LXD
+container, so `provider-remote-url` must name the host address as seen from
+the container, and Ollama must listen beyond localhost (`OLLAMA_HOST=0.0.0.0`):
+
+```bash
+juju config jaime mode=suggest provider=remote model=llama3.2 \
+  provider-remote-url=http://<host-ip>:11434/v1
+```
+
+No `api-token` is needed for a token-less local server.
