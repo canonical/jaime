@@ -199,6 +199,24 @@ Integrate AI providers to analyse persisted incident evidence, identify likely r
 - [x] [charm] Add `show-usage` action with global summary and `incident-id` filter
 - [x] [python] Include usage metadata in the `suggestion-generated` audit event
 
+### 2.4. Local OpenAI-compatible provider
+
+Add a `remote` provider for any local or self-hosted server that speaks the
+OpenAI Chat Completions protocol (Ollama, llama.cpp, vLLM, LiteLLM). Unlike the
+hosted providers it has no fixed endpoint: `provider-remote-url` points at the
+server's `/v1` root and is required when `provider=remote`; `api-token` is
+optional and no `Authorization` header is sent when it is empty. Designed in
+`ARCHITECTURE.md` under [AI usage](#ai-usage); used by the machine charm's
+diagnostics-plan generation and by both charms' suggest/act paths, with token
+usage recorded and no cost reported.
+
+- [ ] [python] Add `providers/remote.py` — OpenAI-compatible Chat Completions provider (stdlib only): `generate` posts `{model, messages}` and parses `choices[0].message.content` plus `usage`; `check` probes `GET {base-url}/models`
+- [ ] [python] Add `Provider.REMOTE` and wire `_get_ai_provider` in `core.py`: `provider-remote-url` required (blocked-status error when missing), `api-token` optional, model required (no provider default)
+- [ ] [charm] Add the `provider-remote-url` option to both `config.yaml` files (shared: same type, default, description) and extend the `provider` description with `remote`
+- [ ] [test] Unit test `providers/remote.py` — init, successful generate, usage parsing, null/empty content, HTTP/connection errors, `check` probing `/models`, no auth header when token empty, token never leaked in errors
+- [ ] [test] Unit test the `core.py` wiring — `provider=remote` without `provider-remote-url` returns a clear error; with `provider-remote-url` and no token it constructs the provider; model defaults to empty
+- [ ] [docs] Document `provider=remote` and `provider-remote-url` in `docs/reference/configuration.md` and the quickstart sections of both charm READMEs
+
 ## 3. Phase 3 — Kubernetes / Multi-substrate Support
 
 Support both a machine subordinate charm and a standalone Kubernetes charm from one codebase, with the substrate-independent behaviour factored into shared code.

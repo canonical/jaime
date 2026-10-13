@@ -617,10 +617,28 @@ AI is not used for:
 ### Providers
 
 `providers/base.py` defines the provider contract; `gemini.py` and
-`openrouter.py` implement it against their REST APIs using the stdlib only.
-Provider connectivity is verified with `check()` on `config-changed` and again
-before generation, so a bad token surfaces as a blocked status rather than a
-failed incident.
+`openrouter.py` implement it against their REST APIs, and `remote.py` does the
+same for any server that speaks the OpenAI Chat Completions protocol (Ollama,
+llama.cpp, vLLM, LiteLLM), all using the stdlib only. Provider connectivity is
+verified with `check()` on `config-changed` and again before generation, so a
+bad token surfaces as a blocked status rather than a failed incident.
+
+`remote` is the local/self-hosted path. Unlike `gemini` and `openrouter` it
+does not target a fixed public endpoint: `provider-remote-url` must be set to
+the server's OpenAI-compatible root (for example `http://host:11434/v1` for
+Ollama) and is required whenever `provider=remote`. No `Authorization` header
+is sent when `api-token` is empty, so a token-less local server works with no
+secret.
+Ollama and most self-hosted servers report prompt and completion tokens but no
+monetary cost, so `show-usage` records tokens-only for `remote` calls, with
+`cost_usd` left unset.
+
+Design decisions: the provider is generic to any OpenAI-compatible server
+rather than ollama-specific, so no new provider is needed if the operator
+switches local servers. Rejected: naming it `ollama`; defaulting
+`provider-remote-url` to a `localhost` value; and reusing `openrouter` with an
+overridable base URL, which would force an auth header onto servers that need
+none.
 
 The `api-token` and `juju-api-password` options accept a Juju secret URI
 (`secret:<id>`, recommended) or a plain string. Tokens are never written to
@@ -751,9 +769,10 @@ Shared by both charms:
 
 ```yaml
 mode: observe                  # observe | suggest | act (act is blocked)
-provider: none                 # none | gemini | openrouter
-model: ""                      # defaults to gemini-2.5-flash / ~deepseek/deepseek-v4-flash-latest
-api-token: ""                  # secret:<id> or plain string
+provider: none                 # none | gemini | openrouter | remote
+model: ""                      # defaults to gemini-2.5-flash / ~deepseek/deepseek-v4-flash-latest; remote has no default
+api-token: ""                  # secret:<id> or plain string; optional for remote
+provider-remote-url: ""        # remote only: OpenAI-compatible /v1 root, required when provider=remote
 watch-statuses: error,blocked
 failure-timeout-minutes: 5
 cooldown-minutes: 30
