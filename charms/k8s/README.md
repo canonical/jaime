@@ -1,5 +1,3 @@
-# Jaime k8s
-
 Jaime k8s is a Juju **Kubernetes standalone** charm that runs as its own pod
 and monitors other applications in the same Juju model. It detects unhealthy
 workload statuses, collects bounded diagnostic context, and writes structured

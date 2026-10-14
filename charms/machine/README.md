@@ -1,5 +1,3 @@
-# Jaime
-
 Jaime is a Juju **machine subordinate** charm that observes a related principal
 charm on the same host, collects bounded diagnostic context when it becomes
 unhealthy, and writes structured incident reports. It can optionally call an
