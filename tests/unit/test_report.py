@@ -68,6 +68,33 @@ class TestGenerateReport:
         content = open(path).read()
         assert "status-message:" not in content
 
+    def test_app_metadata_rendered_in_header(self, tmp_path):
+        context = {
+            **_FULL_CONTEXT,
+            "app_metadata": {
+                "name": "postgresql",
+                "origin": "charmhub",
+                "channel": "16/stable",
+                "revision": 1195,
+                "base": "ubuntu@24.04",
+                "version": "16.14",
+            },
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, context, str(tmp_path))
+        content = open(path).read()
+        assert "- charm: postgresql" in content
+        assert "- channel: 16/stable" in content
+        assert "- revision: 1195" in content
+        assert "- origin: charmhub" in content
+        assert "- base: ubuntu@24.04" in content
+        assert "- version: 16.14" in content
+
+    def test_no_app_metadata_omits_header_detail(self, tmp_path):
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, _FULL_CONTEXT, str(tmp_path))
+        content = open(path).read()
+        assert "- charm:" not in content
+        assert "- revision:" not in content
+
     def test_report_contains_first_seen(self, tmp_path):
         path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, _FULL_CONTEXT, str(tmp_path))
         content = open(path).read()

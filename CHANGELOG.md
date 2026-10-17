@@ -5,6 +5,7 @@
 ### Features
 
 - Add a `remote` provider for any server that speaks the OpenAI Chat Completions protocol (Ollama, llama.cpp, vLLM, LiteLLM). `provider-remote-url` points at the server's `/v1` root and is required with `provider=remote`; `api-token` is optional, with no `Authorization` header sent when it is empty; `remote` has no provider-default model. Setting `provider-remote-url` with `gemini` or `openrouter` blocks the unit
+- Add the monitored application's charm details to the incident report header - charm name, channel (track/risk), revision, origin, base and workload version - read from the Juju controller `FullStatus`. The k8s charm always includes them; the machine charm does when controller credentials are configured, and omits them otherwise
 
 ## [0.1.1] - 2026-10-12
 

@@ -230,3 +230,33 @@ def extract_unit_statuses(full_status: dict,
         for unit_name, unit_data in (app_data.get("units") or {}).items():
             walk(unit_name, unit_data, "")
     return result
+
+
+def extract_app_metadata(full_status: dict, application: str) -> dict:
+    """Extract an application's charm metadata from a FullStatus response.
+
+    Returns a dict with the keys the report header renders - ``name``,
+    ``channel`` (track/risk), ``revision``, ``origin``, ``base`` and
+    ``version`` - omitting any that the application does not expose. Returns
+    ``{}`` when the application is not present.
+    """
+    app = (full_status.get("applications") or {}).get(application)
+    if not app:
+        return {}
+
+    base = app.get("base") or {}
+    result: dict[str, object] = {}
+    if app.get("charm-name"):
+        result["name"] = app["charm-name"]
+    if app.get("charm-channel"):
+        result["channel"] = app["charm-channel"]
+    if app.get("charm-rev") is not None:
+        result["revision"] = app["charm-rev"]
+    if app.get("charm-origin"):
+        result["origin"] = app["charm-origin"]
+    if base.get("name"):
+        channel = base.get("channel", "")
+        result["base"] = f"{base['name']}@{channel}" if channel else base["name"]
+    if app.get("version"):
+        result["version"] = app["version"]
+    return result
