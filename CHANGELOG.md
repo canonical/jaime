@@ -5,6 +5,8 @@
 ### Features
 
 - Add a `remote` provider for any server that speaks the OpenAI Chat Completions protocol (Ollama, llama.cpp, vLLM, LiteLLM). `provider-remote-url` points at the server's `/v1` root and is required with `provider=remote`; `api-token` is optional, with no `Authorization` header sent when it is empty; `remote` has no provider-default model. Setting `provider-remote-url` with `gemini` or `openrouter` blocks the unit
+- Add an always-on snap inventory (`snap list`) and a bounded journalctl sample - errors/warnings only, for the relevant units (plan-listed, failed, and snap service units), limited to the incident time window - to machine incident reports
+- Render machine report logs as a compact timeline - full `YYYY-MM-DD HH:MM:SS` stamps, consecutive identical messages collapsed to a `×N` count - for `## Recent unit logs` and `## Journal`, and digest the broad network-port fallback to `local-address:port owner`
 
 ## [0.1.1] - 2026-10-12
 

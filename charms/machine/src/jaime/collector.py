@@ -39,6 +39,7 @@ _CAP_DISK = 100
 _CAP_MEMORY = 50
 _CAP_CHARM_CONFIG = 200
 _CAP_HEALTH_OUTPUT = 100
+_CAP_JOURNAL_UNITS = 6
 
 # The diagnostics plan is operator- or AI-authored, so its item counts are
 # capped too; otherwise a large plan could multiply every per-item limit.
@@ -620,6 +621,100 @@ def collect_snap_context(max_lines: int = _DEFAULT_MAX_LINES) -> dict:
     }
 
 
+def collect_snap_list(max_lines: int = _DEFAULT_MAX_LINES) -> list[str]:
+    """Always-on snap inventory (``snap list``), or [] on hosts without snapd.
+
+    Unlike ``collect_snap_context`` this is not gated on a failed service: the
+    inventory of installed snaps is small and tells a reader which charms and
+    runtimes are present. The header/separator rows are dropped; rows are
+    otherwise kept verbatim (``Name  Version  Rev  Tracking  Publisher``).
+    """
+    if shutil.which("snap") is None:
+        return []
+    out = _run(["snap", "list"])
+    if not out:
+        return []
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    if lines and lines[0].lstrip().startswith("Name"):
+        lines = lines[1:]
+    return _cap_lines(_deduplicate_lines(lines), max_lines)
+
+
+def _systemd_unit_name(unit: str) -> str:
+    """Normalise a systemd unit reference to its ``.service`` name."""
+    unit = unit.strip()
+    if not unit.endswith(".service"):
+        unit = f"{unit}.service"
+    return unit
+
+
+def _journal_units(diagnostics_plan: dict | None,
+                   systemd_failed: list[str]) -> list[str]:
+    """Relevant systemd units for journalctl, bounded.
+
+    Union of: plan-listed ``systemd_units``, failed systemd units, and the
+    host's snap service units (``snap.<snap>.<app>.service``). On the machine
+    charm's typical single-tenant hosts the snap services coincide with the
+    principal's workload. Deduplicated and capped.
+    """
+    units: list[str] = []
+    mp = (diagnostics_plan or {}).get("monitoring_plan", {})
+    for unit in mp.get("systemd_units", [])[:_PLAN_ITEM_CAPS["systemd_units"]]:
+        if isinstance(unit, str):
+            units.append(_systemd_unit_name(unit))
+    for unit in systemd_failed[:_CAP_JOURNAL_UNITS]:
+        units.append(_systemd_unit_name(unit))
+    if shutil.which("snap") is not None:
+        for svc in _snap_services(_run(["snap", "services"]))[:_CAP_JOURNAL_UNITS]:
+            units.append(f"snap.{svc['service']}.service")
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for unit in units:
+        if unit not in seen:
+            seen.add(unit)
+            result.append(unit)
+    return result[:_CAP_JOURNAL_UNITS]
+
+
+def collect_journal_errors(
+    max_lines: int = _DEFAULT_MAX_LINES,
+    from_time: datetime.datetime | None = None,
+    log_window_minutes: int = _DEFAULT_LOG_WINDOW_MINUTES,
+    buffer_minutes: int = 5,
+    units: list[str] | None = None,
+) -> list[str]:
+    """Bounded journalctl sample: errors and warnings for the relevant units.
+
+    Only ``warning`` priority and above are kept, anchored to the incident
+    window the same way ``collect_unit_logs`` is: ``from_time - buffer_minutes``
+    when provided, hard-capped by ``log_window_minutes``. Returns [] when
+    journalctl is unavailable, no units are given, or nothing matched.
+    """
+    if not units or shutil.which("journalctl") is None:
+        return []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    earliest_allowed = now - datetime.timedelta(minutes=log_window_minutes)
+    if from_time is not None:
+        cutoff = from_time - datetime.timedelta(minutes=buffer_minutes)
+        cutoff = max(cutoff, earliest_allowed)
+    else:
+        cutoff = earliest_allowed
+
+    cmd = [
+        "journalctl", "--no-pager", "-o", "short-iso",
+        "--since", cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+        "-p", "warning",
+    ]
+    for unit in units:
+        cmd += ["--unit", unit]
+
+    out = _run(cmd, timeout=15)
+    if not out:
+        return []
+    return _cap_lines(_deduplicate_lines(out.splitlines()), max_lines)
+
+
 # ---------------------------------------------------------------------------
 # Main collection entry point
 # ---------------------------------------------------------------------------
@@ -675,6 +770,13 @@ def collect_context(
         "systemd_failed": systemd_failed,
         "systemd_failed_detail": _collect_systemd_failed_detail(systemd_failed),
         "snap": collect_snap_context(max_lines),
+        "snap_list": collect_snap_list(max_lines),
+        "journal": collect_journal_errors(
+            max_lines, from_time=from_time,
+            log_window_minutes=log_window_minutes,
+            buffer_minutes=buffer_minutes,
+            units=_journal_units(diagnostics_plan, systemd_failed),
+        ),
         "collected_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
