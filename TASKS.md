@@ -571,6 +571,24 @@ the acceptance tests.
 - [x] [test] Add documentation CI checks: `codespell` for spelling across the repository, and `mdformat --check` for `README.md` and `docs/`
 - [x] [test] Add `tox -e docs` and a `make test-docs` target so the checks run locally
 
+### 4.13. Snap inventory and journalctl in machine reports
+
+- [x] [python] Collect a compact always-on snap inventory and add it to the machine context
+- [x] [python] Collect a bounded journalctl sample: errors/warnings, relevant units, incident time window, line cap
+- [x] [charm] Render the snap inventory and the journal sample in the machine report
+- [x] [test] Unit tests and regenerated example report
+- [x] [docs] Document both in the report structure
+
+### 4.14. Compact timeline, port digest and YAML actions in reports
+
+Report-level compaction for high-volume machine sections (kept lossy-at-render, not at collection).
+
+- [x] [python] Compact timestamped logs into a timeline (full-date stamps, repeat counts) in the report
+- [x] [python] Digest network ports to address/owner, without blank lines between entries
+- [x] [charm] Render declared actions as a compact YAML block without blank lines
+- [x] [test] Unit tests and regenerated example report
+- [x] [docs] Record the report-level compaction exception in the projection section
+
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
 ### 5.1. Continuous integration
