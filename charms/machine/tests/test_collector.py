@@ -21,6 +21,9 @@ def _no_background_io():
     return mock.patch.multiple(
         "jaime.collector",
         collect_snap_context=mock.MagicMock(return_value={}),
+        collect_snap_list=mock.MagicMock(return_value=[]),
+        collect_journal_errors=mock.MagicMock(return_value=[]),
+        _journal_units=mock.MagicMock(return_value=[]),
         collect_ss_connections=mock.MagicMock(return_value=[]),
         collect_firewall_rules=mock.MagicMock(return_value={}),
         collect_charm_config=mock.MagicMock(return_value={}),
@@ -322,6 +325,8 @@ class TestCollectContext:
         assert "disk_usage" in ctx
         assert "memory_summary" in ctx
         assert "charm_config" in ctx
+        assert "snap_list" in ctx
+        assert "journal" in ctx
         assert "collected_at" in ctx
 
     def test_collected_at_is_utc_iso(self):
@@ -782,3 +787,61 @@ class TestBoundsOnPreviouslyUnbounded:
             ctx = collect_context("x/0", diagnostics_plan=plan)
         assert len(ctx["plan_results"]["processes"]["items"]) == jcollector._PLAN_ITEM_CAPS["processes"]
         assert len(ctx["plan_results"]["systemd_units"]["items"]) == jcollector._PLAN_ITEM_CAPS["systemd_units"]
+
+
+class TestCollectSnapList:
+    def test_drops_header_and_returns_rows(self):
+        output = (
+            "Name  Version  Rev  Tracking  Publisher  Notes\n"
+            "charmed-postgresql  16.4  123  16/stable  canonical  -\n"
+            "core24  24.04  2124  latest/stable  canonical  base\n"
+        )
+        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
+             mock.patch("jaime.collector._run", return_value=output):
+            result = jcollector.collect_snap_list()
+        assert result == [
+            "charmed-postgresql  16.4  123  16/stable  canonical  -",
+            "core24  24.04  2124  latest/stable  canonical  base",
+        ]
+
+    def test_empty_without_snapd(self):
+        with mock.patch("jaime.collector.shutil.which", return_value=None):
+            assert jcollector.collect_snap_list() == []
+
+
+class TestJournalUnits:
+    def test_union_of_plan_failed_and_snap(self):
+        plan = {"monitoring_plan": {"systemd_units": ["postgresql", "vault.service"]}}
+        services_out = (
+            "Service  Startup  Current  Notes\n"
+            "charmed-postgresql.patroni  enabled  active  -\n"
+        )
+        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
+             mock.patch("jaime.collector._run", return_value=services_out):
+            units = jcollector._journal_units(plan, ["fail.service"])
+        assert "postgresql.service" in units
+        assert "vault.service" in units
+        assert "fail.service" in units
+        assert "snap.charmed-postgresql.patroni.service" in units
+        assert len(units) == len(set(units))
+
+
+class TestCollectJournalErrors:
+    def test_builds_command_and_returns_lines(self):
+        lines = "2026-10-17T15:29:11+00:00 host postgres[1699]: FATAL:  connection refused\n"
+        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/journalctl"), \
+             mock.patch("jaime.collector._run", return_value=lines) as m:
+            result = jcollector.collect_journal_errors(
+                units=["postgresql.service"], from_time=None,
+            )
+        assert result and "FATAL" in result[0]
+        cmd = m.call_args[0][0]
+        assert "-p" in cmd and "warning" in cmd
+        assert "--unit" in cmd and "postgresql.service" in cmd
+
+    def test_empty_without_journalctl(self):
+        with mock.patch("jaime.collector.shutil.which", return_value=None):
+            assert jcollector.collect_journal_errors(units=["postgresql.service"]) == []
+
+    def test_empty_without_units(self):
+        assert jcollector.collect_journal_errors(units=[]) == []
