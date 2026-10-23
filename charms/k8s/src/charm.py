@@ -23,6 +23,7 @@ from jaime.controller import (
     ControllerError,
     JujuControllerClient,
     agent_conf_path,
+    extract_app_metadata,
     extract_unit_statuses,
     parse_agent_conf,
 )
@@ -300,6 +301,27 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
             logger.debug("could not fetch config for %s: %s", app_name, e)
             return {}
 
+    def _fetch_app_metadata(self, app_name: str) -> dict:
+        """Fetch an application's charm metadata for the report header."""
+        username = self.model.config.get("juju-api-user", "")
+        password = self._resolve_juju_password()
+        if not username or not password:
+            return {}
+        conf_path = agent_conf_path(unit_name=self.unit.name)
+        if conf_path is None:
+            return {}
+        try:
+            conf = parse_agent_conf(conf_path)
+            with JujuControllerClient(
+                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
+            ) as client:
+                client.login(username, password)
+                full = client.full_status()
+            return extract_app_metadata(full, app_name)
+        except Exception as e:
+            logger.debug("could not fetch app metadata for %s: %s", app_name, e)
+            return {}
+
     # ------------------------------------------------------------------
     # Setup guidance
     # ------------------------------------------------------------------
@@ -378,6 +400,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         )
         app_name = unit_name.split("/")[0]
         context["juju_config"] = self._fetch_app_config(app_name)
+        context["app_metadata"] = self._fetch_app_metadata(app_name)
         return context
 
     def _collect_report_context(self, unit_name: str, since_iso: str) -> dict:
@@ -394,6 +417,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         )
         app_name = unit_name.split("/")[0]
         context["juju_config"] = self._fetch_app_config(app_name)
+        context["app_metadata"] = self._fetch_app_metadata(app_name)
         return context
 
 

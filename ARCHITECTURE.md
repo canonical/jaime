@@ -223,7 +223,7 @@ appear in this order, and a section with no data is omitted entirely rather than
 rendered empty:
 
 ```text
-Header: incident id, unit, status, status-message, first-seen, generated
+Header: incident id, unit, charm (name/channel/revision/origin/base/version), status, status-message, first-seen, generated
 ## Executive summary            workload status + status message, errors/warnings, operator-visible config
 ## Network ports               plan-driven port checks; broad fallback digested to addr:port owner
 ## Network connections          one ss collection, listening and established
@@ -253,6 +253,15 @@ Header: incident id, unit, status, status-message, first-seen, generated
 -- both substrates --
 ## Recent unit logs             compact timeline: error/warning lines with counts, full-date stamps
 ```
+
+The header lists the monitored application's charm details next to the unit
+name - charm name, channel (track/risk), revision, origin, base and workload
+version - so a report says which exact build is being diagnosed. They come from
+the Juju controller `FullStatus` application fields (`charm-name`,
+`charm-channel`, `charm-rev`, `charm-origin`, `base`, `version`). Availability
+is substrate-dependent: the k8s charm always reads them, while the machine
+charm only can when `juju-api-user`/`juju-api-password` are configured; when
+the data is unavailable the header falls back to the unit line alone.
 
 Two rules matter beyond ordering. Environment variables are reported as
 set/unset only, because the collector reads Jaime's own hook environment rather

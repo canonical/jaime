@@ -18,6 +18,7 @@ from jaime.controller import (
     ControllerError,
     JujuControllerClient,
     agent_conf_path,
+    extract_app_metadata,
     extract_unit_statuses,
     parse_agent_conf,
 )
@@ -397,6 +398,7 @@ class JaimeCharm(CoreMixin, CharmBase):
             "log_lines": len(context.get("unit_logs", [])),
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }, self.model.config.get("audit-log-path", ""))
+        context["app_metadata"] = self._fetch_principal_app_metadata()
         return context
 
     def _collect_report_context(self, unit_name: str, since_iso: str) -> dict:
@@ -404,10 +406,43 @@ class JaimeCharm(CoreMixin, CharmBase):
         log_window = self.model.config.get("log-window-minutes", 30)
         max_lines = self.model.config.get("max-context-lines", 500)
         diagnostics_plan = read_diagnostics_file(self._diagnostics_path)
-        return collect_context(
+        context = collect_context(
             unit_name, log_window, max_lines,
             diagnostics_plan=diagnostics_plan,
         )
+        context["app_metadata"] = self._fetch_principal_app_metadata()
+        return context
+
+    def _fetch_principal_app_metadata(self) -> dict:
+        """Charm metadata (channel, revision, ...) of the principal for the report.
+
+        Best-effort: returns ``{}`` (and the report omits the detail lines) when
+        the principal cannot be resolved or the operator has not configured
+        controller credentials. The principal's status is read from goal-state,
+        which carries no channel or revision, so the controller is the only
+        source for these fields.
+        """
+        principal_app = self._get_principal_name()
+        if not principal_app:
+            return {}
+        username = self.model.config.get("juju-api-user", "")
+        password = self._resolve_juju_password()
+        if not username or not password:
+            return {}
+        conf_path = agent_conf_path(unit_name=self.unit.name)
+        if conf_path is None:
+            return {}
+        try:
+            conf = parse_agent_conf(conf_path)
+            with JujuControllerClient(
+                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
+            ) as client:
+                client.login(username, password)
+                full = client.full_status()
+            return extract_app_metadata(full, principal_app)
+        except Exception as e:
+            logger.debug("could not fetch principal app metadata: %s", e)
+            return {}
 
     # ------------------------------------------------------------------
     # Diagnostics plan

@@ -9,6 +9,7 @@ from jaime.controller import (
     ControllerAuthError,
     ControllerError,
     JujuControllerClient,
+    extract_app_metadata,
     extract_unit_statuses,
     parse_agent_conf,
 )
@@ -292,3 +293,48 @@ class TestExtractMachineUnitStatuses:
     def test_machine_defaults_empty_when_absent(self):
         result = extract_unit_statuses(_FULL_STATUS)
         assert result["postgresql-k8s/0"]["machine"] == ""
+
+
+class TestExtractAppMetadata:
+    def _full_status(self):
+        return {
+            "applications": {
+                "postgresql": {
+                    "charm-name": "postgresql",
+                    "charm-origin": "charmhub",
+                    "charm-channel": "16/stable",
+                    "charm-rev": 1195,
+                    "base": {"name": "ubuntu", "channel": "24.04"},
+                    "version": "16.14",
+                }
+            }
+        }
+
+    def test_extracts_all_fields(self):
+        meta = extract_app_metadata(self._full_status(), "postgresql")
+        assert meta == {
+            "name": "postgresql",
+            "origin": "charmhub",
+            "channel": "16/stable",
+            "revision": 1195,
+            "base": "ubuntu@24.04",
+            "version": "16.14",
+        }
+
+    def test_unknown_application_returns_empty(self):
+        assert extract_app_metadata(self._full_status(), "redis") == {}
+
+    def test_empty_applications_returns_empty(self):
+        assert extract_app_metadata({}, "postgresql") == {}
+
+    def test_omits_absent_fields(self):
+        full = {
+            "applications": {
+                "local-app": {
+                    "charm-name": "local-app",
+                    "base": {"name": "ubuntu"},
+                }
+            }
+        }
+        meta = extract_app_metadata(full, "local-app")
+        assert meta == {"name": "local-app", "base": "ubuntu"}

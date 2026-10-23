@@ -210,12 +210,12 @@ optional and no `Authorization` header is sent when it is empty. Designed in
 diagnostics-plan generation and by both charms' suggest/act paths, with token
 usage recorded and no cost reported.
 
-- [ ] [python] Add `providers/remote.py` — OpenAI-compatible Chat Completions provider (stdlib only): `generate` posts `{model, messages}` and parses `choices[0].message.content` plus `usage`; `check` probes `GET {base-url}/models`
-- [ ] [python] Add `Provider.REMOTE` and wire `_get_ai_provider` in `core.py`: `provider-remote-url` required (blocked-status error when missing), `api-token` optional, model required (no provider default)
-- [ ] [charm] Add the `provider-remote-url` option to both `config.yaml` files (shared: same type, default, description) and extend the `provider` description with `remote`
-- [ ] [test] Unit test `providers/remote.py` — init, successful generate, usage parsing, null/empty content, HTTP/connection errors, `check` probing `/models`, no auth header when token empty, token never leaked in errors
-- [ ] [test] Unit test the `core.py` wiring — `provider=remote` without `provider-remote-url` returns a clear error; with `provider-remote-url` and no token it constructs the provider; model defaults to empty
-- [ ] [docs] Document `provider=remote` and `provider-remote-url` in `docs/reference/configuration.md` and the quickstart sections of both charm READMEs
+- [x] [python] Add `providers/remote.py` — OpenAI-compatible Chat Completions provider (stdlib only): `generate` posts `{model, messages}` and parses `choices[0].message.content` plus `usage`; `check` probes `GET {base-url}/models`
+- [x] [python] Add `Provider.REMOTE` and wire `_get_ai_provider` in `core.py`: `provider-remote-url` required (blocked-status error when missing), `api-token` optional, model required (no provider default)
+- [x] [charm] Add the `provider-remote-url` option to both `config.yaml` files (shared: same type, default, description) and extend the `provider` description with `remote`
+- [x] [test] Unit test `providers/remote.py` — init, successful generate, usage parsing, null/empty content, HTTP/connection errors, `check` probing `/models`, no auth header when token empty, token never leaked in errors
+- [x] [test] Unit test the `core.py` wiring — `provider=remote` without `provider-remote-url` returns a clear error; with `provider-remote-url` and no token it constructs the provider; model defaults to empty
+- [x] [docs] Document `provider=remote` and `provider-remote-url` in `docs/reference/configuration.md` and the quickstart sections of both charm READMEs
 
 ## 3. Phase 3 — Kubernetes / Multi-substrate Support
 
@@ -570,6 +570,15 @@ the acceptance tests.
 - [x] [docs] Complete the action lists in both charm `README.md` files
 - [x] [test] Add documentation CI checks: `codespell` for spelling across the repository, and `mdformat --check` for `README.md` and `docs/`
 - [x] [test] Add `tox -e docs` and a `make test-docs` target so the checks run locally
+
+### 4.12. Charm details in incident reports
+
+- [x] [python] Add `extract_app_metadata(full_status, application)` to `controller.py` - reads `charm-name`, `charm-channel`, `charm-rev`, `charm-origin`, `base`, `version` from a FullStatus application object and returns `{}` when absent
+- [x] [python] Render the app `app_metadata` as header lines (charm, channel, revision, origin, base, version) next to `unit` in `report.py`, omitted when the metadata is absent
+- [x] [charm] k8s: fetch app metadata from FullStatus in both context collectors for the watched application
+- [x] [charm] machine: fetch the principal's app metadata best-effort (only when `juju-api-*` credentials are configured), else `{}`
+- [x] [test] Unit tests for the parser and for header rendering (present and absent), plus non-blocking charm collectors
+- [x] [docs] Document the charm-detail header lines and the machine no-credential fallback
 
 ### 4.13. Snap inventory and journalctl in machine reports
 

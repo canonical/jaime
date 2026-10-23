@@ -146,8 +146,24 @@ def generate_report(
         "# Incident Report",
         f"- incident: {incident_id}",
         f"- unit: {unit_name}",
-        f"- status: {workload}",
     ]
+    # Charm identity of the monitored application: channel (track/risk),
+    # revision, origin, base and version come from the controller's FullStatus.
+    # Omitted entirely when unavailable (machine charm without controller creds).
+    app_meta = context.get("app_metadata") or {}
+    for key, label in (
+        ("name", "charm"),
+        ("channel", "channel"),
+        ("revision", "revision"),
+        ("origin", "origin"),
+        ("base", "base"),
+        ("version", "version"),
+    ):
+        value = app_meta.get(key)
+        if value is None or value == "":
+            continue
+        header.append(f"- {label}: {value}")
+    header.append(f"- status: {workload}")
     if status_message:
         header.append(f"- status-message: {status_message}")
     header.extend([
