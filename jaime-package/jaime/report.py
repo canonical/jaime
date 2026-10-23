@@ -31,6 +31,81 @@ def _append(lines: list[str], *chunks: list[str]) -> None:
         lines.append("")
 
 
+_LOG_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})")
+
+
+def compact_log_lines(lines: list[str]) -> list[str]:
+    """Compact timestamped log lines into a timeline with full-date stamps.
+
+    Consecutive identical messages (ignoring the leading timestamp) are
+    collapsed to their first occurrence with a ``×N`` repeat count, and every
+    entry keeps a full ``YYYY-MM-DD HH:MM:SS`` timestamp. Lines without a
+    leading timestamp (e.g. dedup markers) pass through unchanged. Used for the
+    report-level rendering of unit and journal logs.
+    """
+    result: list[str] = []
+    last_message: str | None = None
+    last_ts = ""
+    run = 0
+
+    def flush() -> None:
+        nonlocal last_message, last_ts, run
+        if last_message is None:
+            return
+        count = f" ×{run}" if run > 1 else ""
+        result.append(f"{last_ts}  {last_message}{count}")
+
+    for line in lines:
+        m = _LOG_TIMESTAMP_RE.match(line)
+        if m:
+            ts = f"{m.group(1)} {m.group(2)}"
+            message = line[m.end():].strip()
+            if message == last_message:
+                run += 1
+                continue
+            flush()
+            last_message, last_ts, run = message, ts, 1
+        else:
+            flush()
+            last_message, last_ts, run = None, "", 0
+            result.append(line.rstrip())
+    flush()
+    return result
+
+
+_SS_LINE_RE = re.compile(
+    r"^(?P<netid>\S+)\s+(?P<state>\S+)\s+\S+\s+\S+\s+"
+    r"(?P<local>\S+)\s+(?P<peer>\S+)(?:\s+(?P<proc>.*))?$"
+)
+
+
+def digest_network_ports(lines: list[str]) -> list[str]:
+    """Compact an ``ss`` dump to ``local-address:port  owner``.
+
+    Drops the header row and the netid/state/queue/peer columns; the owner is
+    the program name from ``users:(("name",pid=...,fd=...))`` when present.
+    Lines that do not parse (e.g. already-digested input) pass through.
+    """
+    result: list[str] = []
+    for line in lines:
+        if line.lstrip().startswith("Netid"):
+            continue
+        m = _SS_LINE_RE.match(line.strip())
+        if not m:
+            result.append(line.rstrip())
+            continue
+        proc = (m.group("proc") or "").strip()
+        owner = ""
+        if proc:
+            mm = re.search(r'users:\(\(\s*"([^"]+)"', proc)
+            owner = mm.group(1) if mm else proc
+        if owner:
+            result.append(f"- {m.group('local')}  {owner}")
+        else:
+            result.append(f"- {m.group('local')}")
+    return result
+
+
 def _config_value_display(key: str, opt: dict) -> str:
     """Value rendering for a Juju config option, redacted when sensitive."""
     return redact_config_value(key, opt.get("value"), opt.get("type"))
@@ -112,6 +187,8 @@ def generate_report(
 
     # Background sections
     _append_section_snap(lines, context)
+    _append_section_snap_list(lines, context)
+    _append_section_journal(lines, context)
     _append_section_k8s_pod(lines, context)
     _append_section_k8s_previous_logs(lines, context)
     _append_section_k8s_events(lines, context)
@@ -306,7 +383,7 @@ def _append_section_network(lines: list[str], plan_results: dict) -> None:
         return
 
     if section["type"] == "plan":
-        _append(lines, ["## Network ports"])
+        port_lines = []
         for item in section.get("items", []):
             port = item.get("port", "")
             protocol = item.get("protocol", "tcp")
@@ -315,11 +392,13 @@ def _append_section_network(lines: list[str], plan_results: dict) -> None:
             # plan can only report that it is declared in the pod spec. Both
             # are a pass, but the printed status keeps the distinction.
             icon = "✓" if status in ("listening", "declared") else "✗"
-            _append(lines, [f"- `{port}/{protocol}` → {status} {icon}"])
+            port_lines.append(f"- `{port}/{protocol}` → {status} {icon}")
+        if port_lines:
+            _append(lines, ["## Network ports", *port_lines])
     else:
         raw_lines = section.get("lines", [])
         if raw_lines:
-            _append(lines, ["## Network ports", "```", *raw_lines, "```"])
+            _append(lines, ["## Network ports", *digest_network_ports(raw_lines)])
 
 
 def _append_section_plan_containers(lines: list[str], plan_results: dict) -> None:
@@ -376,18 +455,13 @@ def _append_section_snap(lines: list[str], context: dict) -> None:
     """Snap status and failed-service logs.
 
     The reader (context["snap"]) is empty on hosts without snapd and when no
-    service is in the failed state, so the whole section is omitted then.
+    service is in the failed state, so the whole section is omitted then. The
+    installed-snap inventory itself lives in the always-on `## Snap packages`
+    section rendered from `context["snap_list"]`.
     """
     snap = context.get("snap") or {}
     if not snap:
         return
-
-    _append(lines, ["## Snap packages"])
-    packages = snap.get("packages", [])
-    if packages:
-        _append(lines, ["```", *packages, "```"])
-    else:
-        _append(lines, ["_Not available._"])
 
     services = snap.get("services", [])
     if services:
@@ -405,6 +479,22 @@ def _append_section_snap(lines: list[str], context: dict) -> None:
         _append(lines, [
             f"## Snap logs: `{service}` (failed)", "```", *snap_lines, "```",
         ])
+
+
+def _append_section_snap_list(lines: list[str], context: dict) -> None:
+    """Always-on inventory of installed snaps, when snapd is present."""
+    snap_list = context.get("snap_list") or []
+    if not snap_list:
+        return
+    _append(lines, ["## Snap packages", "```", *snap_list, "```"])
+
+
+def _append_section_journal(lines: list[str], context: dict) -> None:
+    """Journalctl errors/warnings for the relevant units, time-bounded."""
+    journal = context.get("journal") or []
+    if not journal:
+        return
+    _append(lines, ["## Journal (errors/warnings)", "```", *compact_log_lines(journal), "```"])
 
 
 def _append_section_k8s_previous_logs(lines: list[str], context: dict) -> None:
@@ -490,13 +580,19 @@ def _append_section_charm_actions(lines: list[str], context: dict) -> None:
     if not declared:
         return
 
-    _append(lines, ["## Available actions"])
-    for name in sorted(declared):
-        description = declared[name].get("description", "")
-        if description:
-            _append(lines, [f"- `{name}` — {description}"])
-        else:
-            _append(lines, [f"- `{name}`"])
+    # Rendered as a compact YAML block (name: description) - the actions'
+    # native format is actions.yaml - with no blank lines between entries.
+    # Multi-line descriptions are collapsed to a single line so the block has
+    # no empty lines inside.
+    actions_block = yaml.safe_dump(
+        {
+            name: " ".join((declared[name].get("description", "") or "").split())
+            for name in sorted(declared)
+        },
+        sort_keys=False,
+        allow_unicode=True,
+    ).rstrip()
+    _append(lines, ["## Available actions", "```yaml", *actions_block.splitlines(), "```"])
 
 
 # Keys in a charm's metadata.yaml that are URLs (or lists of URLs) pointing at
@@ -600,7 +696,7 @@ def _append_section_logs(lines: list[str], context: dict) -> None:
     ])
     _append(lines, ["_Logs are in chronological order._"])
     if unit_logs:
-        _append(lines, ["```", *unit_logs, "```"])
+        _append(lines, ["```", *compact_log_lines(unit_logs), "```"])
     else:
         _append(lines, ["_No recent logs found._"])
 

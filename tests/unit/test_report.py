@@ -384,11 +384,10 @@ class TestReportPlanResults:
         path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
         content = open(path).read()
         assert "## Available actions" in content
-        assert "`initialize`" in content
-        assert "`unseal`" in content
-        assert "`get-status`" in content
-        # descriptions included so the model knows what each action does
-        assert "Initialize the service" in content
+        assert "```yaml" in content
+        assert "initialize: Initialize the service" in content
+        assert "unseal: Unseal the service" in content
+        assert "get-status: Get service status" in content
 
     def test_charm_actions_omitted_when_empty(self, tmp_path):
         ctx = {
@@ -468,7 +467,6 @@ class TestSnapSection:
     def test_renders_failed_service_and_logs(self, tmp_path):
         context = {
             "snap": {
-                "packages": ["charmed-postgresql 16.4 123 16/stable canonical -"],
                 "services": [
                     "charmed-postgresql.patroni enabled failed -",
                     "vault.vaultd disabled inactive -",
@@ -479,15 +477,42 @@ class TestSnapSection:
             }
         }
         report = _render(tmp_path, context)
-        assert "## Snap packages" in report
         assert "## Snap services" in report
         assert "**Failed services:** `charmed-postgresql.patroni`" in report
         assert "## Failed snap changes" in report
         assert "## Snap logs: `charmed-postgresql.patroni` (failed)" in report
         assert "ERROR could not start" in report
 
+    def test_renders_snap_inventory_when_present(self, tmp_path):
+        context = {
+            "snap_list": ["charmed-postgresql 16.4 123 16/stable canonical -"],
+        }
+        report = _render(tmp_path, context)
+        assert "## Snap packages" in report
+        assert "charmed-postgresql 16.4 123 16/stable canonical -" in report
+
+    def test_snap_inventory_omitted_when_empty(self, tmp_path):
+        report = _render(tmp_path, {"snap_list": []})
+        assert "## Snap packages" not in report
+
     def test_omitted_when_no_snap_context(self, tmp_path):
         assert "## Snap" not in _render(tmp_path, {"unit_logs": []})
+
+
+class TestJournalSection:
+    def test_renders_journal_lines(self, tmp_path):
+        context = {
+            "journal": [
+                "2026-10-17T15:29:11+00:00 host postgres[1699]: FATAL:  connection refused",
+            ],
+        }
+        report = _render(tmp_path, context)
+        assert "## Journal (errors/warnings)" in report
+        assert "FATAL:  connection refused" in report
+
+    def test_journal_omitted_when_empty(self, tmp_path):
+        report = _render(tmp_path, {"journal": []})
+        assert "## Journal" not in report
 
 
 class TestSystemdDetail:
@@ -674,3 +699,67 @@ class TestSecretRedaction:
         prompt = build_suggest_prompt(report)
         for secret in (self._PASSWORD, self._TOKEN, self._SECRET_URI, self._HEALTH):
             assert secret not in prompt
+
+
+class TestCompactLogLines:
+    def test_collapses_consecutive_identical_messages(self):
+        from jaime.report import compact_log_lines
+        lines = [
+            "2026-07-14 10:00:00 ERROR connect failed",
+            "2026-07-14 10:00:01 ERROR connect failed",
+            "2026-07-14 10:00:02 ERROR connect failed",
+            "2026-07-14 10:01:00 INFO retry",
+        ]
+        result = compact_log_lines(lines)
+        assert result[0] == "2026-07-14 10:00:00  ERROR connect failed ×3"
+        assert result[1] == "2026-07-14 10:01:00  INFO retry"
+
+    def test_keeps_full_date_and_time(self):
+        from jaime.report import compact_log_lines
+        result = compact_log_lines(["2026-10-17T15:29:11+00:00 host postgres[1]: FATAL: boom"])
+        assert result[0].startswith("2026-10-17 15:29:11  ")
+
+    def test_non_timestamp_lines_pass_through(self):
+        from jaime.report import compact_log_lines
+        result = compact_log_lines(["    … 8 similar lines omitted", "2026-07-14 10:00:00 ERROR x"])
+        assert result[0] == "    … 8 similar lines omitted"
+        assert result[1] == "2026-07-14 10:00:00  ERROR x"
+
+
+class TestDigestNetworkPorts:
+    def test_drops_header_and_columns(self):
+        from jaime.report import digest_network_ports
+        lines = [
+            "Netid State  Recv-Q Send-Q      Local Address:Port Peer Address:PortProcess",
+            "tcp   LISTEN 0      200         10.82.123.108:5432      0.0.0.0:*    users:((\"postgres\",pid=1699,fd=7))",
+        ]
+        result = digest_network_ports(lines)
+        assert result == ["- 10.82.123.108:5432  postgres"]
+
+    def test_unparseable_lines_pass_through(self):
+        from jaime.report import digest_network_ports
+        result = digest_network_ports(["LISTEN 0 128 0.0.0.0:5432"])
+        assert result == ["LISTEN 0 128 0.0.0.0:5432"]
+
+
+class TestActionsMultiline:
+    def test_multiline_description_collapses_blank_lines(self, tmp_path):
+        import yaml
+        actions_yaml = yaml.dump({
+            "resume-refresh": {
+                "description": "Refresh next unit(s).\n\n"
+                               "If the pause-after-unit-refresh config is set to `all`, "
+                               "this action will refresh the next unit.",
+            },
+        })
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "", "actions_yaml": actions_yaml},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        lines = content.splitlines()
+        yaml_block = lines[lines.index("```yaml") + 1:lines.index("```", lines.index("```yaml") + 1)]
+        # No empty lines inside the YAML block.
+        assert all(line.strip() for line in yaml_block)
+        assert any(line.startswith("resume-refresh: ") for line in yaml_block)

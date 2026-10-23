@@ -20,9 +20,7 @@ Unit is in **blocked** state.
 - `port`: `5432`
 
 ## Network ports
-
 - `5432/tcp` → not_listening ✗
-
 - `6432/tcp` → listening ✓
 
 ## Network connections (listening + active)
@@ -99,15 +97,6 @@ inactive
 /tmp:5432 - no response
   ```
 
-## Snap packages
-
-```
-Name                  Version   Rev    Tracking       Publisher   Notes
-charmed-postgresql    16.4      123    16/stable      canonical✓  -
-core22                20240920  1622   latest/stable  canonical✓  base
-lxd                   5.21.3    32180  latest/stable  canonical✓  -
-```
-
 ## Snap services
 ```
 Name                             Startup   Current   Notes
@@ -140,12 +129,11 @@ vault.vaultd                     disabled  inactive  -
 - `port`: `5432`
 
 ## Available actions
-
-- `get-password` — Retrieve the generated database password
-
-- `restart` — Restart the PostgreSQL service
-
-- `start` — Start the PostgreSQL service
+```yaml
+get-password: [REDACTED] the generated database password
+restart: Restart the PostgreSQL service
+start: Start the PostgreSQL service
+```
 
 ## Charm links
 
@@ -172,8 +160,8 @@ _Showing only lines matching `error` or `warning` (case-insensitive), with a con
 _Logs are in chronological order._
 
 ```
-2026-07-14 09:55:01 WARNING unit.postgresql/0.juju-log Cannot start: no replicas
-2026-07-14 09:56:10 ERROR unit.postgresql/0.juju-log snap service charmed-postgresql.patroni is failed
-2026-07-14 09:57:00 ERROR unit.postgresql/0.juju-log Hook start failed: disk full
-2026-07-14 09:58:00 INFO juju.worker Running cleanup hooks
+2026-07-14 09:55:01  WARNING unit.postgresql/0.juju-log Cannot start: no replicas
+2026-07-14 09:56:10  ERROR unit.postgresql/0.juju-log snap service charmed-postgresql.patroni is failed
+2026-07-14 09:57:00  ERROR unit.postgresql/0.juju-log Hook start failed: disk full
+2026-07-14 09:58:00  INFO juju.worker Running cleanup hooks
 ```

@@ -225,7 +225,7 @@ rendered empty:
 ```text
 Header: incident id, unit, charm (name/channel/revision/origin/base/version), status, status-message, first-seen, generated
 ## Executive summary            workload status + status message, errors/warnings, operator-visible config
-## Network ports               plan-driven port checks
+## Network ports               plan-driven port checks; broad fallback digested to addr:port owner
 ## Network connections          one ss collection, listening and established
 ## Firewall rules               iptables, ufw, nftables (when present)
 ## Log files                    plan-driven log tails
@@ -234,10 +234,11 @@ Header: incident id, unit, charm (name/channel/revision/origin/base/version), st
 ## Environment variables        set/unset only, never values
 ## Health commands              plan-driven, with exit status and output
 -- machine background --
-## Snap packages               only when a service is in the failed state
+## Snap packages               always-on installed-snap inventory (snap list)
 ## Snap services               all services, including disabled and inactive
 ## Failed snap changes          filtered to the failing snap
 ## Snap logs: <snap>.<app>      failed services only, latest error +/- 10 lines
+## Journal (errors/warnings)    journalctl for relevant units, incident window, compact timeline (machine)
 ## Charm config                 the principal's declared options
 ## Available actions            the principal charm's declared actions (machine)
 ## Charm links                  docs/source/issue URLs from metadata.yaml (machine)
@@ -250,7 +251,7 @@ Header: incident id, unit, charm (name/channel/revision/origin/base/version), st
 ## Resource usage (metrics-server)
 ## Juju application config
 -- both substrates --
-## Recent unit logs             error/warning lines with a context window
+## Recent unit logs             compact timeline: error/warning lines with counts, full-date stamps
 ```
 
 The header lists the monitored application's charm details next to the unit
@@ -264,13 +265,15 @@ the data is unavailable the header falls back to the unit line alone.
 
 Two rules matter beyond ordering. Environment variables are reported as
 set/unset only, because the collector reads Jaime's own hook environment rather
-than the workload's, so a value would be misleading as well as a leak. And the
-snap sections appear only when a service is in the **failed** state — a plain
+than the workload's, so a value would be misleading as well as a leak. The snap
+service sections appear only when a service is in the **failed** state - a plain
 `inactive` service is normal for socket-, dbus- and timer-activated units, and
 `disabled` means it was administratively stopped, so neither is a fault and
-neither fetches logs. Once the section is present, the full snap list and
-services table are shown as context, because another snap running can plausibly
-be the cause.
+neither fetches logs. The installed-snap inventory (`snap list`) is always shown
+when snapd is present, because it is small and tells a reader which runtime is
+being diagnosed. Journalctl errors/warnings are sampled for the units that
+matter - plan-listed `systemd_units`, failed systemd units, and the host's snap
+service units - bounded to the incident time window and a line cap.
 
 The section headings are a **stable contract**, not incidental formatting: the
 prompt projection parses them to tier and compact the report, and
@@ -1009,6 +1012,16 @@ the prompt.** The two stages have different jobs.
   de-duplication and a token budget. This is lossy for the prompt, never for the
   report.
 
+One machine-substrate exception is a deliberate report-level compaction, so the
+report stays readable: high-volume sections render in compact form rather than
+verbatim. Unit logs and journalctl are rendered as a **timeline** (full-date
+timestamps, consecutive identical messages collapsed to a `×N` count), and the
+broad network-port fallback is rendered as a **digest** (`local-address:port
+owner`, header and queue/peer columns dropped). The raw bounded lines are still
+what the collectors returned - `collect-context` and report regeneration
+reproduce them - and the `context-collected` audit event records the counts, so
+this is a rendering choice, not a data loss.
+
 The reasons:
 
 - The report must stand on its own as evidence for a human, and
@@ -1063,6 +1076,8 @@ Per-source treatment:
 | k8s pod and containers | current and last state, init containers | Tier 1 |
 | k8s previous-container logs | bounded, only when restarted | Tier 2 |
 | snap status and services | `max-context-lines` | Tier 2 |
+| snap list (inventory) | always-on when snapd present, capped rows | Tier 2 |
+| journalctl | relevant units, errors/warnings, incident window, line cap | Tier 1 (errors/warnings) |
 | failed snap service logs | 3 failed services, latest error ± 10 lines | Tier 1 when non-empty |
 | disk, memory | small, capped | Tier 3 digest |
 
