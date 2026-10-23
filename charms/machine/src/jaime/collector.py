@@ -37,7 +37,7 @@ _CAP_SNAP_LINES = 100       # lines per failed service
 _CAP_SNAP_CHANGES = 20
 _CAP_DISK = 100
 _CAP_MEMORY = 50
-_CAP_CHARM_CONFIG = 200
+_CAP_CHARM_CONFIG_BYTES = 512 * 1024
 _CAP_HEALTH_OUTPUT = 100
 _CAP_JOURNAL_UNITS = 6
 
@@ -484,15 +484,18 @@ def collect_firewall_rules(max_lines: int = _CAP_FIREWALL) -> dict:
     return result
 
 
-def collect_charm_config(unit_name: str, max_lines: int = _CAP_CHARM_CONFIG) -> dict:
+def collect_charm_config(unit_name: str, max_bytes: int = _CAP_CHARM_CONFIG_BYTES) -> dict:
     """Read the principal charm's config.yaml, actions.yaml and metadata.yaml.
 
     Returns a dict with keys ``config_yaml``, ``actions_yaml`` and
     ``metadata_yaml`` containing the raw file content, or ``""`` if the file is
-    missing/unreadable.
+    missing/unreadable or exceeds the byte cap.
 
-    Bounded by line count only, never by truncating a line: the report parses
-    this YAML, and a truncated line would break the parse and drop the section.
+    Files are read in full, never tailed: the report parses this YAML, and any
+    raw truncation - line-based or otherwise - can sever the top-level
+    structure (e.g. the ``options:`` mapping) and silently drop the section. The
+    byte cap is a safety bound against a pathological file, not a content
+    judgement; charm config schema files are well under it in practice.
     """
     tag = "unit-" + unit_name.replace("/", "-")
     charm_dir = f"/var/lib/juju/agents/{tag}/charm"
@@ -502,10 +505,13 @@ def collect_charm_config(unit_name: str, max_lines: int = _CAP_CHARM_CONFIG) -> 
         try:
             with open(path) as f:
                 raw = f.read()
-            lines = raw.splitlines()
-            if len(lines) > max_lines:
-                raw = "\n".join(lines[-max_lines:])
-            result[name.replace(".yaml", "_yaml")] = raw
+            if len(raw.encode("utf-8", errors="replace")) > max_bytes:
+                logger.warning(
+                    "charm file %s for %s exceeds %d bytes; skipped", path, unit_name, max_bytes
+                )
+                result[name.replace(".yaml", "_yaml")] = ""
+            else:
+                result[name.replace(".yaml", "_yaml")] = raw
         except Exception as e:
             logger.debug("could not read %s for %s: %s", path, unit_name, e)
             result[name.replace(".yaml", "_yaml")] = ""
@@ -762,7 +768,7 @@ def collect_context(
         "tracing_events": collect_tracing_events(
             unit_name, from_time=from_time, buffer_minutes=buffer_minutes,
         ),
-        "charm_config": collect_charm_config(unit_name, max_lines),
+        "charm_config": collect_charm_config(unit_name),
         "disk_usage": collect_disk_usage(_CAP_DISK),
         "memory_summary": collect_memory_summary(_CAP_MEMORY),
         "ss_connections": ss_lines,

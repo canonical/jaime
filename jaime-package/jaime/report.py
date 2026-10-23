@@ -512,15 +512,19 @@ def _append_section_charm_config(lines: list[str], context: dict) -> None:
 
     try:
         parsed = yaml.safe_load(config_yaml)
-        options = (parsed or {}).get("options", {})
+        options = (parsed or {}).get("options", {}) if isinstance(parsed, dict) else {}
     except Exception as e:
         logger.debug("could not parse charm config YAML: %s", e)
         options = {}
 
     if not options:
+        # Present but unparseable/structurally broken config - surface it
+        # instead of silently dropping the section (an invisible truncation
+        # was masking the whole section before the collector byte-cap fix).
+        _append(lines, ["## Charm config", "_Could not parse config.yaml._"])
         return
 
-    _append(lines, ["## Charm config"])
+    section = ["## Charm config"]
     items = sorted(options.items())
     # Empty-string defaults are schema noise: the option is declared but has
     # no default value, so it carries no signal. Boolean/int False/0 defaults
@@ -529,19 +533,14 @@ def _append_section_charm_config(lines: list[str], context: dict) -> None:
         (key, opt) for key, opt in items
         if opt.get("default") not in (None, "")
     ]
-    skipped_empty = len(items) - len(shown)
     for key, opt in shown[:_MAX_CHARM_OPTIONS]:
         default = opt.get("default", "")
-        _append(lines, [f"- `{key}`: `{default}`"])
-    omitted = []
-    if skipped_empty:
-        omitted.append(f"{skipped_empty} options with empty defaults")
+        section.append(f"- `{key}`: `{default}`")
     if len(shown) > _MAX_CHARM_OPTIONS:
-        omitted.append(f"{len(shown) - _MAX_CHARM_OPTIONS} more options")
-    if omitted:
-        _append(lines, [f"_… {' and '.join(omitted)} omitted._"])
+        section.append(f"_… {len(shown) - _MAX_CHARM_OPTIONS} more options omitted._")
     if not shown:
-        _append(lines, ["_No non-empty option defaults._"])
+        section.append("_No non-empty option defaults._")
+    _append(lines, section)
 
 
 _ACTION_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*$")

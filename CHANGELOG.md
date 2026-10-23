@@ -9,6 +9,10 @@
 - Add an always-on snap inventory (`snap list`) and a bounded journalctl sample - errors/warnings only, for the relevant units (plan-listed, failed, and snap service units), limited to the incident time window - to machine incident reports
 - Render machine report logs as a compact timeline - full `YYYY-MM-DD HH:MM:SS` stamps, consecutive identical messages collapsed to a `×N` count - for `## Recent unit logs` and `## Journal`, and digest the broad network-port fallback to `local-address:port owner`
 
+### Bug fixes
+
+- Fix the missing `## Charm config` section in machine reports: the collector tailed `config.yaml` to the last 200 lines, which for a large file severed the top-level `options:` mapping and silently dropped the section. Charm YAML files are now read in full, guarded by a byte cap applied at the call site, and an unparseable-but-present `config.yaml` renders a visible note instead of vanishing
+
 ## [0.1.1] - 2026-10-12
 
 Jaime 0.1.1 is a maintenance release and the first published to the

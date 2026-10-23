@@ -123,9 +123,7 @@ vault.vaultd                     disabled  inactive  -
 ```
 
 ## Charm config
-
 - `max_connections`: `100`
-
 - `port`: `5432`
 
 ## Available actions

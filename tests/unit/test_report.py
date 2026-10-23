@@ -331,7 +331,7 @@ class TestReportPlanResults:
         assert "Listen port" not in content
         assert "description" not in content
 
-    def test_charm_config_omits_empty_defaults_with_marker(self, tmp_path):
+    def test_charm_config_omits_empty_defaults(self, tmp_path):
         import yaml
         config_yaml = yaml.dump({
             "options": {
@@ -350,10 +350,10 @@ class TestReportPlanResults:
         # Non-empty defaults shown.
         assert "`5432`" in content
         assert "`720h`" in content
-        # Empty-string defaults are schema noise: omitted, with a marker.
+        # Empty-string defaults are schema noise: omitted.
         assert "`ca_country_name`" not in content
         assert "`ca_locality`" not in content
-        assert "2 options with empty defaults" in content
+        assert "options with empty defaults" not in content
 
     def test_charm_config_empty_only_section(self, tmp_path):
         import yaml
@@ -369,6 +369,17 @@ class TestReportPlanResults:
         path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
         content = open(path).read()
         assert "No non-empty option defaults" in content
+
+    def test_charm_config_unparseable_shows_note(self, tmp_path):
+        """A present-but-broken config_yaml must not silently drop the section."""
+        ctx = {
+            **_EMPTY_CONTEXT,
+            "charm_config": {"config_yaml": "options: [ unclosed", "actions_yaml": ""},
+        }
+        path = generate_report(INCIDENT_ID, "postgresql/0", "blocked", FIRST_SEEN, ctx, str(tmp_path))
+        content = open(path).read()
+        assert "## Charm config" in content
+        assert "Could not parse config.yaml" in content
 
     def test_charm_actions_listed(self, tmp_path):
         import yaml

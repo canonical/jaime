@@ -338,6 +338,33 @@ class TestCollectContext:
             ctx = collect_context("postgresql/0")
         assert "+00:00" in ctx["collected_at"] or ctx["collected_at"].endswith("Z")
 
+    def test_charm_config_preserved_end_to_end(self):
+        """collect_context must not pass max_lines into the byte cap."""
+        config_yaml = "options:\n" + "\n".join(
+            f"  option-{i}:\n    type: string\n    default: value-{i}" for i in range(300)
+        )
+        contents = {
+            "/var/lib/juju/agents/unit-postgresql-0/charm/config.yaml": config_yaml,
+        }
+        with \
+             mock.patch("jaime.collector.collect_snap_context", return_value={}), \
+             mock.patch("jaime.collector.collect_snap_list", return_value=[]), \
+             mock.patch("jaime.collector.collect_journal_errors", return_value=[]), \
+             mock.patch("jaime.collector._journal_units", return_value=[]), \
+             mock.patch("jaime.collector.collect_ss_connections", return_value=[]), \
+             mock.patch("jaime.collector.collect_firewall_rules", return_value={}), \
+             mock.patch("jaime.collector._collect_systemd_failed_detail", return_value=[]), \
+             mock.patch("jaime.collector.collect_unit_logs", return_value=[]), \
+             mock.patch("jaime.collector.collect_systemd_failed", return_value=[]), \
+             mock.patch("jaime.collector.collect_disk_usage", return_value=[]), \
+             mock.patch("jaime.collector.collect_memory_summary", return_value=[]), \
+             mock.patch("jaime.collector.collect_tracing_events", return_value=[]), \
+             mock.patch("builtins.open", mock.mock_open()) as m:
+            m.side_effect = lambda p, *a, **kw: mock.mock_open(read_data=contents.get(p, ""))()
+            ctx = collect_context("postgresql/0")
+        assert ctx["charm_config"]["config_yaml"].startswith("options:")
+        assert "option-299" in ctx["charm_config"]["config_yaml"]
+
 
 class TestCollectCharmConfig:
     def test_returns_config_and_actions(self):
@@ -363,6 +390,32 @@ class TestCollectCharmConfig:
         assert result["config_yaml"] == ""
         assert result["actions_yaml"] == ""
         assert result["metadata_yaml"] == ""
+
+    def test_large_config_preserves_top_level_options(self):
+        """A config.yaml larger than the old 200-line cap must not be tailed."""
+        import jaime.collector as jcollector
+        lines = ["options:"]
+        for i in range(250):
+            lines.append(f"  option-{i}:\n    type: string\n    default: value-{i}")
+        config_yaml = "\n".join(lines) + "\n"
+        contents = {
+            "/var/lib/juju/agents/unit-postgresql-0/charm/config.yaml": config_yaml,
+        }
+        with mock.patch("builtins.open", mock.mock_open()) as m:
+            m.side_effect = lambda p, *a, **kw: mock.mock_open(read_data=contents.get(p, ""))()
+            result = jcollector.collect_charm_config("postgresql/0")
+        assert result["config_yaml"] == config_yaml
+        assert result["config_yaml"].startswith("options:\n  option-0:")
+
+    def test_over_byte_cap_returns_empty(self):
+        import jaime.collector as jcollector
+        contents = {
+            "/var/lib/juju/agents/unit-postgresql-0/charm/config.yaml": "x" * 100,
+        }
+        with mock.patch("builtins.open", mock.mock_open()) as m:
+            m.side_effect = lambda p, *a, **kw: mock.mock_open(read_data=contents.get(p, ""))()
+            result = jcollector.collect_charm_config("postgresql/0", max_bytes=10)
+        assert result["config_yaml"] == ""
 
 
 class TestCollectTracingEvents:
