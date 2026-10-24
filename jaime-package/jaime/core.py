@@ -12,77 +12,37 @@ ops status classes; it is shared between the two charms but is not part of
 the substrate-agnostic pure library.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
 import logging
-import os
 import traceback
-from enum import Enum
 
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from jaime.incident import Incident, Suggestion
-from jaime.logging import list_incidents, rotate_audit_log, write_event
+from jaime.actions import ActionsMixin
+from jaime.check_cache import CheckCache
+from jaime.controller import (
+    ControllerError,
+    JujuControllerClient,
+    agent_conf_path,
+    parse_agent_conf,
+)
+from jaime.incident import Incident, Suggestion, Turn
+from jaime.logging import write_event
+from jaime.modes import Mode, Provider
 from jaime.report import generate_report
-from jaime.suggest import run_act, run_suggest
+from jaime.suggest import run_act, run_ask, run_suggest
 
 logger = logging.getLogger(__name__)
 
-
-class Mode(str, Enum):
-    OBSERVE = "observe"
-    SUGGEST = "suggest"
-    ACT = "act"
+# Blocked-status messages for the observer credentials, shared by both charms.
+CREDENTIALS_REQUIRED = "juju-api-user and juju-api-password must be configured"
+CREDENTIALS_REJECTED = "juju-api credentials rejected by controller"
 
 
-class Provider(str, Enum):
-    NONE = "none"
-    GEMINI = "gemini"
-    OPENROUTER = "openrouter"
-    REMOTE = "remote"
-
-
-def summarise_usage(entries: list[dict]) -> dict:
-    """Aggregate a list of usage log entries into a summary with per-model breakdown."""
-    prompt_tokens = sum(e.get("prompt_tokens", 0) for e in entries)
-    completion_tokens = sum(e.get("completion_tokens", 0) for e in entries)
-    total_tokens = sum(e.get("total_tokens", 0) for e in entries)
-    costs = [e["cost_usd"] for e in entries if e.get("cost_usd") is not None]
-
-    by_model = {}
-    for e in entries:
-        model = e.get("model") or "unknown"
-        if model not in by_model:
-            by_model[model] = {
-                "calls": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-                "cost_usd": None,
-            }
-        m = by_model[model]
-        m["calls"] += 1
-        m["prompt_tokens"] += e.get("prompt_tokens", 0)
-        m["completion_tokens"] += e.get("completion_tokens", 0)
-        m["total_tokens"] += e.get("total_tokens", 0)
-        if e.get("cost_usd") is not None:
-            m["cost_usd"] = (m["cost_usd"] or 0.0) + e["cost_usd"]
-
-    for m in by_model.values():
-        if m["cost_usd"] is not None:
-            m["cost_usd"] = round(m["cost_usd"], 6)
-
-    return {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-        "cost_usd": round(sum(costs), 6) if costs else None,
-        "by_model": by_model,
-    }
-
-
-class CoreMixin:
+class CoreMixin(ActionsMixin):
     """Substrate-agnostic behaviour shared by both Jaime charms.
 
     Concrete charms must inherit from ``CoreMixin`` and ``CharmBase``, create
@@ -103,9 +63,7 @@ class CoreMixin:
             mode = Mode(self.model.config.get("mode", Mode.OBSERVE))
         except ValueError:
             valid = ", ".join(m.value for m in Mode)
-            self.unit.status = BlockedStatus(
-                f"invalid mode '{self.model.config.get('mode')}', must be one of: {valid}"
-            )
+            self.unit.status = BlockedStatus(f"invalid mode '{self.model.config.get('mode')}', must be one of: {valid}")
             return
 
         try:
@@ -121,15 +79,12 @@ class CoreMixin:
         # Set alongside gemini or openrouter it is a misconfiguration, so
         # surface it rather than letting it pass unnoticed. With provider=none
         # it is dead config (no provider is used), so it is left alone.
-        remote_url = (
-            self.model.config.get("provider-remote-url", "") or ""
-        ).strip()
-        if remote_url and Provider(
-            self.model.config.get("provider", Provider.NONE)
-        ) in (Provider.GEMINI, Provider.OPENROUTER):
-            self.unit.status = BlockedStatus(
-                "provider-remote-url is set but provider is not 'remote'"
-            )
+        remote_url = (self.model.config.get("provider-remote-url", "") or "").strip()
+        if remote_url and Provider(self.model.config.get("provider", Provider.NONE)) in (
+            Provider.GEMINI,
+            Provider.OPENROUTER,
+        ):
+            self.unit.status = BlockedStatus("provider-remote-url is set but provider is not 'remote'")
             return
 
         # Act mode is gated until command allowlisting is implemented.
@@ -158,15 +113,10 @@ class CoreMixin:
         a plain "Ready". If any unit still has an open incident, surface that;
         otherwise fall back to Active("Ready").
         """
-        for unit_name, entry in self._status_tracker._state.items():
-            inc = entry.get("incident")
-            if inc and inc.get("closed_at") is None:
-                short_id = inc.get("id", "")[:8]
-                self.unit.status = ActiveStatus(
-                    f"incident open: {unit_name} "
-                    f"{entry.get('status', 'unknown')} ({short_id})"
-                )
-                return
+        for unit_name, entry, inc in self._status_tracker.incidents():
+            short_id = inc.get("id", "")[:8]
+            self.unit.status = ActiveStatus(f"incident open: {unit_name} {entry.get('status', 'unknown')} ({short_id})")
+            return
         self.unit.status = ActiveStatus(self._ready_message())
 
     def _monitored_applications(self) -> list[str]:
@@ -186,11 +136,7 @@ class CoreMixin:
         return "Ready: monitoring " + ", ".join(apps)
 
     def _watch_statuses(self) -> set[str]:
-        return {
-            s.strip()
-            for s in self.model.config.get("watch-statuses", "error,blocked").split(",")
-            if s.strip()
-        }
+        return {s.strip() for s in self.model.config.get("watch-statuses", "error,blocked").split(",") if s.strip()}
 
     # ------------------------------------------------------------------
     # AI provider
@@ -203,13 +149,9 @@ class CoreMixin:
             return None, f"unsupported provider '{self.model.config.get('provider')}'"
 
         if provider_name == Provider.NONE:
-            return None, (
-                f"mode={self.model.config.get('mode')} but provider is not configured"
-            )
+            return None, (f"mode={self.model.config.get('mode')} but provider is not configured")
 
-        model = self.model.config.get("model", "") or self._default_model(
-            provider_name.value
-        )
+        model = self.model.config.get("model", "") or self._default_model(provider_name.value)
 
         # The remote (OpenAI-compatible) provider has no fixed endpoint and no
         # provider default model. It also needs no token: local servers such as
@@ -223,23 +165,73 @@ class CoreMixin:
                 return None, "provider=remote but model is not set"
             api_token = self._resolve_api_token()
             from jaime.providers.remote import RemoteProvider
+
             return RemoteProvider(api_token, model, base_url), None
 
         api_token = self._resolve_api_token()
         if not api_token:
-            logger.warning(
-                "provider '%s' configured but api-token is empty", provider_name.value
-            )
+            logger.warning("provider '%s' configured but api-token is empty", provider_name.value)
             return None, f"provider={provider_name.value} but api-token is not set"
 
         if provider_name == Provider.GEMINI:
             from jaime.providers.gemini import GeminiProvider
+
             return GeminiProvider(api_token, model), None
         elif provider_name == Provider.OPENROUTER:
             from jaime.providers.openrouter import OpenRouterProvider
+
             return OpenRouterProvider(api_token, model), None
 
         return None, f"unsupported provider '{provider_name.value}'"
+
+    def _log_event(self, level: int, event: str, now: str, **fields) -> None:
+        """Log a structured JSON event (the unit log, not the audit file)."""
+        logger.log(level, json.dumps({"event": event, **fields, "timestamp": now}))
+
+    def _audit(self, event: str, now: str, **fields) -> None:
+        """Append an event to the JSONL audit log."""
+        write_event({"event": event, **fields, "timestamp": now}, self.model.config.get("audit-log-path", ""))
+
+    def _resolve_juju_password(self) -> str:
+        """Resolve the Juju API password from config (plain or secret URI)."""
+        return self._resolve_secret(self.model.config.get("juju-api-password", ""), "password")
+
+    def _has_controller_credentials(self) -> bool:
+        return bool(self.model.config.get("juju-api-user", "") and self._resolve_juju_password())
+
+    @contextlib.contextmanager
+    def _controller_session(self):
+        """Yield a Juju controller client logged in as the observer user.
+
+        Raises ``ControllerError`` when the credentials are not configured or
+        the controller cannot be located, and ``ControllerAuthError`` when the
+        controller rejects them.
+        """
+        if not self._has_controller_credentials():
+            raise ControllerError(CREDENTIALS_REQUIRED)
+
+        conf_path = agent_conf_path(unit_name=self.unit.name)
+        if conf_path is None:
+            raise ControllerError("agent.conf not found: cannot locate controller")
+
+        conf = parse_agent_conf(conf_path)
+        with JujuControllerClient(conf["api_address"], conf["ca_cert"], conf["model_uuid"]) as client:
+            client.login(self.model.config.get("juju-api-user", ""), self._resolve_juju_password())
+            yield client
+
+    def _controller_query(self, query, default, what: str):
+        """Run ``query(client)`` against the controller, best effort.
+
+        Returns ``default`` (and logs why at debug level) when the controller
+        is not configured, unreachable, or the query fails: report enrichment
+        must never break the incident flow.
+        """
+        try:
+            with self._controller_session() as client:
+                return query(client)
+        except Exception as e:
+            logger.debug("could not fetch %s: %s", what, e)
+            return default
 
     def _resolve_api_token(self) -> str:
         """Resolve the api-token config value (secret URI or plain string)."""
@@ -267,9 +259,29 @@ class CoreMixin:
     # Suggest / act
     # ------------------------------------------------------------------
 
-    def _run_mode_logic(self, report_content: str,
-                        additional_context: str = "") -> Suggestion | None:
-        """Run suggest or act logic based on the configured mode."""
+    def _run_mode_logic(
+        self,
+        report_content: str,
+        additional_context: str = "",
+        question: str = "",
+        history: list[dict] | None = None,
+        block_on_error: bool = True,
+    ) -> Suggestion | None:
+        """Run suggest or act logic based on the configured mode.
+
+        A non-empty ``question`` answers it as a conversational turn, with
+        ``history`` carrying the prior turns; act mode ignores both. On
+        failure the reason is left in ``self._last_ai_error``, and the unit is
+        set to blocked unless ``block_on_error`` is false (``ask`` reports the
+        error to the caller instead, since a bot may retry it often).
+        """
+        self._last_ai_error = ""
+
+        def fail(message: str) -> None:
+            self._last_ai_error = message
+            if block_on_error:
+                self.unit.status = BlockedStatus(message)
+
         try:
             mode = Mode(self.model.config.get("mode", Mode.OBSERVE))
         except ValueError:
@@ -283,71 +295,110 @@ class CoreMixin:
         provider, provider_err = self._get_ai_provider()
         if provider is None:
             logger.warning("AI provider unavailable: %s", provider_err)
-            self.unit.status = BlockedStatus(provider_err)
+            fail(provider_err)
             return None
 
-        err = provider.check()
+        err = self._check_provider(provider)
         if err:
             logger.error("AI provider token check failed before generation: %s", err)
-            self.unit.status = BlockedStatus(f"AI provider error: {err[:100]}")
+            fail(f"AI provider error: {err[:100]}")
             return None
 
         try:
             if mode == Mode.SUGGEST:
+                if question:
+                    return run_ask(provider, report_content, question, history)
                 return run_suggest(provider, report_content, additional_context)
 
             suggestion, act_results = run_act(provider, report_content, additional_context)
             for result in act_results:
-                write_event({
-                    "event": "act-command-executed",
-                    "command": result["command"],
-                    "returncode": result["returncode"],
-                    "stderr": result.get("stderr", ""),
-                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                }, self.model.config.get("audit-log-path", ""))
+                write_event(
+                    {
+                        "event": "act-command-executed",
+                        "command": result["command"],
+                        "returncode": result["returncode"],
+                        "stderr": result.get("stderr", ""),
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    },
+                    self.model.config.get("audit-log-path", ""),
+                )
             return suggestion
 
         except Exception as e:
-            logger.error("AI provider call failed in mode '%s': %s", mode.value,
-                         traceback.format_exc())
-            self.unit.status = BlockedStatus(f"AI provider error: {str(e)[:100]}")
+            logger.error("AI provider call failed in mode '%s': %s", mode.value, traceback.format_exc())
+            fail(f"AI provider error: {str(e)[:100]}")
             return None
 
-    def _store_suggestion(self, unit_name: str, incident_dict: dict,
-                          suggestion: Suggestion) -> Suggestion:
-        """Attach a suggestion to the incident, persist it, and record token usage."""
-        updated = Incident.from_dict(incident_dict).attach_suggestion(suggestion)
+    def _check_provider(self, provider) -> str | None:
+        """Connectivity check, skipped while a recent success is on record.
+
+        A chat bot may call ``ask`` many times a minute; checking before every
+        call would add a round trip and a failure point to each of them.
+        """
+        cache = CheckCache(self._status_tracker.path + ".provider-check")
+        key = hashlib.sha256(
+            "\0".join(
+                [
+                    str(self.model.config.get("provider", "")),
+                    str(self.model.config.get("model", "")),
+                    str(self.model.config.get("provider-remote-url", "")),
+                    self._resolve_api_token(),
+                ]
+            ).encode()
+        ).hexdigest()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if cache.is_fresh(key, now):
+            return None
+        err = provider.check()
+        if err is None:
+            cache.record(key, now)
+        return err
+
+    def _store_suggestion(self, unit_name: str, incident_dict: dict, suggestion: Suggestion) -> Suggestion:
+        """Append a suggestion as a turn (legacy one-shot), persist, audit."""
+        turn = Turn.from_suggestion(suggestion)
+        self._store_turn(unit_name, incident_dict, turn)
+        return suggestion
+
+    def _store_turn(self, unit_name: str, incident_dict: dict, turn: Turn, history_count: int = 0) -> Turn:
+        """Append a conversational turn to the incident, prune, persist, audit.
+
+        Returns the persisted turn, carrying its assigned per-incident id.
+        """
+        updated = Incident.from_dict(incident_dict).append_turn(turn)
+        turn = updated.turns[-1]
+        updated = updated.prune_turns()
         self._status_tracker.update_incident(unit_name, updated.to_dict())
 
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        audit_path = self.model.config.get("audit-log-path", "")
+        extra = {"usage": turn.usage.to_dict()} if turn.usage is not None else {}
+        self._audit(
+            "suggestion-generated",
+            now,
+            unit=unit_name,
+            incident_id=incident_dict["id"],
+            turn_id=turn.id,
+            question=turn.question,
+            history_turns=history_count,
+            commands=list(turn.commands),
+            mode=self.model.config.get("mode", Mode.OBSERVE.value),
+            **extra,
+        )
 
-        audit_event = {
-            "event": "suggestion-generated",
-            "unit": unit_name,
-            "incident_id": incident_dict["id"],
-            "commands": list(suggestion.commands),
-            "mode": self.model.config.get("mode", Mode.OBSERVE.value),
-            "timestamp": now,
-        }
-        if suggestion.usage is not None:
-            audit_event["usage"] = suggestion.usage.to_dict()
-        write_event(audit_event, audit_path)
-
-        if suggestion.usage is not None:
-            usage_entry = suggestion.usage.to_dict()
+        if turn.usage is not None:
+            usage_entry = turn.usage.to_dict()
             usage_entry["incident_id"] = incident_dict["id"]
+            usage_entry["turn_id"] = turn.id
             usage_entry["timestamp"] = now
             self._status_tracker.record_usage(unit_name, usage_entry)
 
-        return suggestion
+        return turn
 
     # ------------------------------------------------------------------
     # Incident lifecycle (shared state machine)
     # ------------------------------------------------------------------
 
-    def _process_unit(self, unit_name: str, status: str, since_iso: str,
-                      message: str = "") -> None:
+    def _process_unit(self, unit_name: str, status: str, since_iso: str, message: str = "") -> None:
         """Drive the incident lifecycle for a single observed unit.
 
         ``message`` is the workload status message shown by ``juju status``
@@ -356,6 +407,7 @@ class CoreMixin:
         charm's goal-state hook tool carries no message.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
+        ts = now.isoformat()
         watch_statuses = self._watch_statuses()
         failure_timeout = self.model.config.get("failure-timeout-minutes", 5)
         cooldown = self.model.config.get("cooldown-minutes", 30)
@@ -363,41 +415,32 @@ class CoreMixin:
         watched = status in watch_statuses
         had_open_incident = self._status_tracker.has_open_incident(unit_name)
         prior_incident = self._status_tracker.current_incident(unit_name)
-        increment = self._status_tracker.observe(
-            unit_name, status, since_iso, watched, message
-        )
+        increment = self._status_tracker.observe(unit_name, status, since_iso, watched, message)
 
         # --- Recovery ---
         if not watched:
             if increment == 1 and had_open_incident and prior_incident:
                 closed = Incident.from_dict(prior_incident).close()
                 self._status_tracker.close_incident(unit_name, closed.to_dict())
-                logger.info(json.dumps({
-                    "event": "incident-closed",
-                    "unit": unit_name,
-                    "workload": status,
-                    "incident": closed.to_dict(),
-                    "timestamp": now.isoformat(),
-                }))
-                write_event({
-                    "event": "incident-closed",
-                    "unit": unit_name,
-                    "workload": status,
-                    "incident_id": closed.id,
-                    "closed_at": closed.closed_at,
-                    "timestamp": now.isoformat(),
-                }, self.model.config.get("audit-log-path", ""))
+                self._log_event(
+                    logging.INFO, "incident-closed", ts, unit=unit_name, workload=status, incident=closed.to_dict()
+                )
+                self._audit(
+                    "incident-closed",
+                    ts,
+                    unit=unit_name,
+                    workload=status,
+                    incident_id=closed.id,
+                    closed_at=closed.closed_at,
+                )
             elif increment == 1:
-                logger.debug(json.dumps({
-                    "event": "principal-status-recovered",
-                    "unit": unit_name,
-                    "workload": status,
-                    "timestamp": now.isoformat(),
-                }))
+                self._log_event(logging.DEBUG, "principal-status-recovered", ts, unit=unit_name, workload=status)
             else:
                 logger.debug(
                     "unit %s: workload=%s (not watched, increment=%d)",
-                    unit_name, status, increment,
+                    unit_name,
+                    status,
+                    increment,
                 )
             self.unit.status = ActiveStatus(self._ready_message())
             return
@@ -410,15 +453,16 @@ class CoreMixin:
         # never reach failure-timeout-minutes.
         first_seen = self._status_tracker.unhealthy_since(unit_name) or since_iso
 
-        logger.debug(json.dumps({
-            "event": "principal-status-watched",
-            "unit": unit_name,
-            "workload": status,
-            "first_seen": first_seen,
-            "status_since": since_iso,
-            "increment": increment,
-            "timestamp": now.isoformat(),
-        }))
+        self._log_event(
+            logging.DEBUG,
+            "principal-status-watched",
+            ts,
+            unit=unit_name,
+            workload=status,
+            first_seen=first_seen,
+            status_since=since_iso,
+            increment=increment,
+        )
 
         # --- Within failure-timeout: waiting ---
         try:
@@ -430,11 +474,11 @@ class CoreMixin:
         if unhealthy_minutes < failure_timeout:
             logger.debug(
                 "unit %s: unhealthy for %.1f min, waiting for failure-timeout (%d min)",
-                unit_name, unhealthy_minutes, failure_timeout,
+                unit_name,
+                unhealthy_minutes,
+                failure_timeout,
             )
-            self.unit.status = WaitingStatus(
-                f"{status} - waiting ({unhealthy_minutes:.1f}/{failure_timeout} min)"
-            )
+            self.unit.status = WaitingStatus(f"{status} - waiting ({unhealthy_minutes:.1f}/{failure_timeout} min)")
             return
 
         # --- Cooldown: incident already open ---
@@ -448,56 +492,52 @@ class CoreMixin:
             if cooldown_elapsed < cooldown:
                 incident_dict = self._status_tracker.current_incident(unit_name)
                 short_id = (incident_dict or {}).get("id", "")[:8]
-                logger.debug(json.dumps({
-                    "event": "principal-status-cooldown",
-                    "unit": unit_name,
-                    "workload": status,
-                    "first_seen": first_seen,
-                    "increment": increment,
-                    "cooldown_elapsed_minutes": round(cooldown_elapsed, 1),
-                    "cooldown_minutes": cooldown,
-                    "incident": incident_dict,
-                    "timestamp": now.isoformat(),
-                }))
+                self._log_event(
+                    logging.DEBUG,
+                    "principal-status-cooldown",
+                    ts,
+                    unit=unit_name,
+                    workload=status,
+                    first_seen=first_seen,
+                    increment=increment,
+                    cooldown_elapsed_minutes=round(cooldown_elapsed, 1),
+                    cooldown_minutes=cooldown,
+                    incident=incident_dict,
+                )
                 # Preserve BlockedStatus if a provider error was already set.
                 if not isinstance(self.unit.status, BlockedStatus):
-                    self.unit.status = ActiveStatus(
-                        f"incident open: {unit_name} {status} ({short_id})"
-                    )
+                    self.unit.status = ActiveStatus(f"incident open: {unit_name} {status} ({short_id})")
                 return
 
         # --- Open a new incident ---
         incident = Incident.open(status_message=message)
         short_id = incident.id[:8]
-        logger.info(json.dumps({
-            "event": "incident-opened",
-            "unit": unit_name,
-            "workload": status,
-            "status_message": message,
-            "first_seen": first_seen,
-            "status_since": since_iso,
-            "increment": increment,
-            "incident": incident.to_dict(),
-            "timestamp": now.isoformat(),
-        }))
-        self._status_tracker.record_reported(
-            unit_name, now.isoformat(), incident.to_dict()
+        self._log_event(
+            logging.INFO,
+            "incident-opened",
+            ts,
+            unit=unit_name,
+            workload=status,
+            status_message=message,
+            first_seen=first_seen,
+            status_since=since_iso,
+            increment=increment,
+            incident=incident.to_dict(),
         )
-        write_event({
-            "event": "incident-start",
-            "unit": unit_name,
-            "workload": status,
-            "status_message": message,
-            "first_seen": first_seen,
-            "status_since": since_iso,
-            "incident_id": incident.id,
-            "timestamp": now.isoformat(),
-        }, self.model.config.get("audit-log-path", ""))
+        self._status_tracker.record_reported(unit_name, ts, incident.to_dict())
+        self._audit(
+            "incident-start",
+            ts,
+            unit=unit_name,
+            workload=status,
+            status_message=message,
+            first_seen=first_seen,
+            status_since=since_iso,
+            incident_id=incident.id,
+        )
 
         # Collect context and generate report via the substrate hook.
-        self.unit.status = MaintenanceStatus(
-            f"collecting context: {unit_name} ({short_id})"
-        )
+        self.unit.status = MaintenanceStatus(f"collecting context: {unit_name} ({short_id})")
         context = self._collect_incident_context(unit_name, first_seen, incident)
 
         report_path = generate_report(
@@ -509,13 +549,7 @@ class CoreMixin:
             report_dir=self.model.config.get("report-dir", ""),
             status_message=message,
         )
-        write_event({
-            "event": "report-generated",
-            "unit": unit_name,
-            "incident_id": incident.id,
-            "report_path": report_path,
-            "timestamp": now.isoformat(),
-        }, self.model.config.get("audit-log-path", ""))
+        self._audit("report-generated", ts, unit=unit_name, incident_id=incident.id, report_path=report_path)
         logger.info("incident %s: report written to %s", short_id, report_path)
 
         # Run suggest/act: produce a Suggestion and attach it to the incident.
@@ -526,235 +560,8 @@ class CoreMixin:
         if suggestion is not None:
             self._store_suggestion(unit_name, incident.to_dict(), suggestion)
         if not isinstance(self.unit.status, BlockedStatus):
-            self.unit.status = ActiveStatus(
-                f"incident open: {unit_name} {status} ({short_id})"
-            )
+            self.unit.status = ActiveStatus(f"incident open: {unit_name} {status} ({short_id})")
 
     # ------------------------------------------------------------------
     # Shared action handlers
     # ------------------------------------------------------------------
-
-    def _on_action_show_status(self, event):
-        """Return the current monitoring state for every monitored unit.
-
-        Juju action results are a flat map of scalars, so the per-unit records
-        are returned as a JSON array under ``result`` rather than as separate
-        keys. A single dict keyed by fixed field names would let each unit
-        overwrite the previous one, which is how this action previously
-        reported only an arbitrary single unit.
-
-        Records are filtered to the applications resolved as monitored, so an
-        application removed from configuration disappears from the action. The
-        tracker keeps the observation itself for the incident history.
-        """
-        monitored = set(self._monitored_applications())
-        records = [
-            {
-                "unit": unit_name,
-                "workload": entry.get("status", "unknown"),
-                "status-message": entry.get("message", ""),
-                "first-seen": entry.get("unhealthy_since") or entry.get("since", ""),
-                "status-since": entry.get("since", ""),
-                "increment": entry.get("increment", 0),
-                "last-reported": entry.get("last_reported") or "",
-                "incident-id": (entry.get("incident") or {}).get("id", ""),
-                "incident-opened-at": (entry.get("incident") or {}).get("opened_at", ""),
-            }
-            for unit_name, entry in self._status_tracker._state.items()
-            if unit_name.split("/")[0] in monitored
-        ]
-        event.set_results({"result": json.dumps(records, indent=2)})
-
-    def _on_action_show_usage(self, event):
-        incident_id = event.params.get("incident-id", "").strip()
-        all_entries = self._status_tracker.all_usage_log()
-
-        if not all_entries:
-            event.set_results({"result": json.dumps(
-                {"message": "no usage recorded yet"}, indent=2)})
-            return
-
-        if incident_id:
-            entries = [e for e in all_entries if e.get("incident_id") == incident_id]
-            if not entries:
-                event.fail(f"no usage found for incident {incident_id}")
-                return
-            summary = summarise_usage(entries)
-            summary["incident_id"] = incident_id
-        else:
-            summary = summarise_usage(all_entries)
-            summary["total_incidents"] = len({e.get("incident_id") for e in all_entries})
-            summary["total_calls"] = len(all_entries)
-
-        event.set_results({"result": json.dumps(summary, indent=2)})
-
-    def _on_action_get_suggestion(self, event):
-        additional_context = event.params.get("additional-context", "")
-        context_hash = (
-            hashlib.sha256(additional_context.encode()).hexdigest()
-            if additional_context else ""
-        )
-
-        current_provider = self.model.config.get("provider", "none")
-        current_model = (
-            self.model.config.get("model", "") or self._default_model(current_provider)
-        )
-
-        for unit_name, entry in self._status_tracker._state.items():
-            inc = entry.get("incident")
-            if inc and inc.get("closed_at") is None:
-                suggestion = inc.get("suggestion")
-                if suggestion:
-                    stored_hash = suggestion.get("context_hash", "")
-                    stored_model = (suggestion.get("usage") or {}).get("model", "")
-                    model_changed = stored_model and stored_model != current_model
-                    if not model_changed and (not additional_context or context_hash == stored_hash):
-                        event.set_results({
-                            "incident-id": inc["id"],
-                            "description": suggestion["description"],
-                            "commands": "\n".join(suggestion["commands"]),
-                            "command-count": len(suggestion["commands"]),
-                            "generated-at": suggestion["generated_at"],
-                            "cached": "true",
-                        })
-                        return
-                    if model_changed:
-                        logger.info(
-                            "model changed from '%s' to '%s' — regenerating suggestion",
-                            stored_model, current_model,
-                        )
-                    else:
-                        logger.info("additional-context hash differs — regenerating suggestion")
-
-                mode = Mode(self.model.config.get("mode", Mode.OBSERVE))
-                if mode == Mode.OBSERVE:
-                    event.fail("no suggestion available: mode is 'observe'")
-                    return
-
-                report_dir = self.model.config.get("report-dir", "") or "/var/log/jaime/reports"
-                report_path = os.path.join(report_dir, f'{inc["id"]}.md')
-                if not os.path.exists(report_path):
-                    event.fail(f"report file not found at {report_path}")
-                    return
-                with open(report_path) as f:
-                    report_content = f.read()
-
-                suggestion = self._run_mode_logic(report_content, additional_context)
-                if suggestion is None:
-                    event.fail("could not generate suggestion")
-                    return
-
-                self._store_suggestion(unit_name, inc, suggestion)
-                results = {
-                    "incident-id": inc["id"],
-                    "description": suggestion.description,
-                    "commands": "\n".join(suggestion.commands),
-                    "command-count": len(suggestion.commands),
-                    "generated-at": suggestion.generated_at,
-                    "cached": "false",
-                }
-                if suggestion.usage is not None:
-                    results["model"] = suggestion.usage.model
-                    results["prompt-tokens"] = str(suggestion.usage.prompt_tokens)
-                    results["completion-tokens"] = str(suggestion.usage.completion_tokens)
-                    results["total-tokens"] = str(suggestion.usage.total_tokens)
-                    if suggestion.usage.cost_usd is not None:
-                        results["cost-usd"] = f"{suggestion.usage.cost_usd:.6f}"
-                event.set_results(results)
-                return
-
-        event.fail("no open incident found")
-
-    def _on_action_generate_report(self, event):
-        for unit_name, entry in self._status_tracker._state.items():
-            inc = entry.get("incident")
-            if inc and inc.get("closed_at") is None:
-                since_iso = entry.get("unhealthy_since") or entry.get("since", "")
-                context = self._collect_report_context(unit_name, since_iso)
-                report_path = generate_report(
-                    incident_id=inc["id"],
-                    unit_name=unit_name,
-                    workload=entry.get("status", "unknown"),
-                    first_seen=since_iso,
-                    context=context,
-                    report_dir=self.model.config.get("report-dir", ""),
-                    status_message=entry.get("message", ""),
-                )
-                event.set_results({
-                    "incident-id": inc["id"],
-                    "report-path": report_path,
-                })
-                return
-        event.fail("no open incident found")
-
-    def _on_action_reset(self, event):
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        audit_path = self.model.config.get("audit-log-path", "")
-
-        # Close every incident still open in the audit log as well as the ones
-        # the tracker carries. events.jsonl is append-only and remembers every
-        # incident ever opened, while status-state.json keeps only the latest
-        # per unit — so a reset that closes only the tracked incidents would
-        # leave older audit rows reported as open by list-incidents forever.
-        # Append a closure row per open incident; we never rewrite history.
-        open_records = list_incidents(audit_path)
-        closed_incident_ids = set()
-        for record in open_records:
-            closed_incident_ids.add(record["incident_id"])
-            write_event({
-                "event": "incident-closed",
-                "unit": record["unit"],
-                "reason": "manual reset",
-                "incident_id": record["incident_id"],
-                "closed_at": now,
-                "timestamp": now,
-            }, audit_path)
-
-        for unit_name in list(self._status_tracker._state):
-            if self._status_tracker.has_open_incident(unit_name):
-                incident_dict = self._status_tracker.current_incident(unit_name)
-                closed = Incident.from_dict(incident_dict).close()
-                logger.info(json.dumps({
-                    "event": "incident-closed",
-                    "unit": unit_name,
-                    "reason": "manual reset",
-                    "incident": closed.to_dict(),
-                    "timestamp": now,
-                }))
-                # The list_incidents pass above already closed this incident in
-                # the audit log; write only if it was not found there, so an
-                # incident never gets two closure rows for the same reset.
-                if closed.id not in closed_incident_ids:
-                    write_event({
-                        "event": "incident-closed",
-                        "unit": unit_name,
-                        "reason": "manual reset",
-                        "incident_id": closed.id,
-                        "closed_at": closed.closed_at,
-                        "timestamp": now,
-                    }, audit_path)
-
-        # Rotate the audit log: archive the now-closed history and start a
-        # fresh file, so list-incidents shows no residual incidents while the
-        # archived trail is kept for forensics.
-        rotate_audit_log(audit_path)
-
-        self._status_tracker.reset()
-        self.unit.status = ActiveStatus(self._ready_message())
-        logger.info("status state cleared")
-        event.set_results({"result": "status state cleared"})
-
-    def _on_action_list_incidents(self, event):
-        """Return incidents recorded in the audit log, newest first.
-
-        Correlates ``incident-start`` / ``report-generated`` /
-        ``incident-closed`` events by incident id, with an optional ``unit``
-        filter. Tolerates a missing or malformed log. The result is a JSON
-        array under ``result`` because Juju action results are a flat map of
-        scalars.
-        """
-        unit = event.params.get("unit", "").strip()
-        incidents = list_incidents(
-            self.model.config.get("audit-log-path", ""), unit=unit
-        )
-        event.set_results({"result": json.dumps(incidents, indent=2)})

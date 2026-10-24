@@ -212,6 +212,8 @@ Agents must follow these rules:
 ├── TASKS.md
 ├── jaime-package/              # Shared Python library — no Juju dependency
 │   └── jaime/
+│       ├── actions.py
+│       ├── core.py
 │       ├── incident.py
 │       ├── logging.py
 │       ├── principal.py

@@ -51,11 +51,80 @@ Keep your response concise and focused on the incident.
 {additional_context_section}Incident report:
 ---
 {report}
----"""
+---
+
+Reminder: give your diagnosis, then the single remediation command in one \
+fenced code block tagged with 'bash'. Only suggest a `juju run` action that \
+appears under "Available actions" in the report."""
 
 
-def build_suggest_prompt(report_content: str,
-                         additional_context: str = "") -> str:
+_ASK_PROMPT_TEMPLATE = """\
+You are Jaime, a Juju charm diagnostic assistant. An operator is asking \
+follow-up questions about an incident on a Juju unit. The incident report and \
+the previous conversation are below.
+
+Answer the operator's latest question directly and concisely, using only the \
+report and the previous conversation. If they do not contain what is needed to \
+answer, say so and name what the operator should check, instead of guessing. \
+Do not repeat earlier answers.
+
+Only when the question asks how to fix or change something, give the single \
+command that does it in a fenced code block tagged with 'bash'. Do not put \
+investigation commands or alternatives in fenced code blocks. If you suggest a \
+`juju run <unit> <action>` command, the action MUST appear under "Available \
+actions" in the report. Never invent an action, a URL or a procedure that is \
+not in the report.
+
+Incident report:
+---
+{report}
+---
+
+{history_section}Operator question:
+{question}
+
+Reminder: answer from the report and the conversation only. Give a command, in \
+one fenced code block tagged with 'bash', only if the question asks how to fix \
+or change something."""
+
+# Only the most recent turns reach the prompt, each answer is truncated, so the
+# prompt stays bounded however long the conversation gets.
+_HISTORY_MAX_TURNS = 10
+_HISTORY_ANSWER_CHARS = 400
+
+
+def build_history_section(history: list[dict] | None) -> str:
+    """Render the most recent conversation turns as a compact section.
+
+    Each history entry is a dict with ``question``, ``description`` and
+    optionally ``id`` and ``commands``. A turn without a question is the
+    incident's initial one-shot suggestion. Absent or empty history returns an
+    empty string.
+    """
+    lines = []
+    for turn in (history or [])[-_HISTORY_MAX_TURNS:]:
+        question = (turn.get("question") or "").strip()
+        answer = " ".join((turn.get("description") or "").split())
+        if not question and not answer:
+            continue
+        if len(answer) > _HISTORY_ANSWER_CHARS:
+            answer = answer[:_HISTORY_ANSWER_CHARS].rstrip() + "..."
+        label = f"Turn {turn['id']}" if turn.get("id") else "Turn"
+        if question:
+            lines.append(f"{label} - operator: {question}")
+        else:
+            lines.append(f"{label} - initial suggestion (no question):")
+        if answer:
+            lines.append(f"  Jaime: {answer}")
+        commands = [c for c in turn.get("commands") or [] if c]
+        if commands:
+            lines.append(f"  Suggested command: {'; '.join(commands)}")
+    if not lines:
+        return ""
+    return "Previous conversation:\n" + "\n".join(lines) + "\n\n"
+
+
+def build_suggest_prompt(report_content: str, additional_context: str = "") -> str:
     """Build the prompt to send to the AI provider for suggest/act mode."""
     extra = ""
     if additional_context:
@@ -70,6 +139,15 @@ def build_suggest_prompt(report_content: str,
     return _SUGGEST_PROMPT_TEMPLATE.format(
         report=report_content,
         additional_context_section=extra,
+    )
+
+
+def build_ask_prompt(report_content: str, question: str, history: list[dict] | None = None) -> str:
+    """Build the prompt for one conversational turn (`ask`)."""
+    return _ASK_PROMPT_TEMPLATE.format(
+        report=report_content,
+        history_section=build_history_section(history),
+        question=question,
     )
 
 
@@ -112,8 +190,7 @@ def execute_command(command: str, timeout: int = 30) -> dict:
         return {"command": command, "returncode": -1, "stdout": "", "stderr": str(e)}
 
 
-def run_suggest(provider, report_content: str,
-                additional_context: str = "") -> Suggestion:
+def run_suggest(provider, report_content: str, additional_context: str = "") -> Suggestion:
     """Call the AI provider and return a Suggestion.
 
     Raises if the provider call fails, so the caller can surface the error.
@@ -131,6 +208,27 @@ def run_suggest(provider, report_content: str,
         description=llm_response,
         commands=commands,
         context_hash=context_hash,
+        usage=usage,
+    )
+
+
+def run_ask(provider, report_content: str, question: str, history: list[dict] | None = None) -> Suggestion:
+    """Answer one operator question about an incident.
+
+    ``history`` carries the prior conversation turns so the model sees the
+    thread. Raises if the provider call fails. Returns None if provider is
+    None.
+    """
+    if provider is None:
+        return None
+    prompt = build_ask_prompt(report_content, question, history)
+    llm_response, usage = provider.generate(prompt)
+    logger.info("AI provider answered an operator question")
+    logger.debug("AI provider answer:\n%s", llm_response)
+    return Suggestion.from_llm(
+        description=llm_response,
+        commands=parse_commands(llm_response),
+        context_hash=hashlib.sha256(question.encode()).hexdigest(),
         usage=usage,
     )
 
@@ -154,12 +252,14 @@ def run_act(
     for cmd in suggestion.commands:
         if dry_run:
             logger.info("act dry-run: would execute: %s", cmd)
-            results.append({
-                "command": cmd,
-                "returncode": None,
-                "stdout": "",
-                "stderr": "dry-run: not executed",
-            })
+            results.append(
+                {
+                    "command": cmd,
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": "dry-run: not executed",
+                }
+            )
         else:
             logger.info("act: executing command: %s", cmd)
             result = execute_command(cmd)

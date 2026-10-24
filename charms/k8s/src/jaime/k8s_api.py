@@ -45,13 +45,10 @@ class K8sApiClient:
         url = f"{_API_BASE}{path}"
         if params:
             url += "?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(
-            url, headers={"Authorization": f"Bearer {self._token}"}
-        )
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self._token}"})
         ctx = ssl.create_default_context(cafile=self._ca_path)
         try:
-            with urllib.request.urlopen(req, context=ctx,
-                                        timeout=self._timeout) as resp:
+            with urllib.request.urlopen(req, context=ctx, timeout=self._timeout) as resp:
                 return (
                     resp.status,
                     resp.read().decode(errors="replace"),
@@ -108,9 +105,7 @@ class K8sApiClient:
             if status is None:
                 return "unreachable", "cannot read pod logs"
             if status == 403:
-                return "forbidden", (
-                    "cannot read pod logs (apply jaime-k8s-rbac.yaml)"
-                )
+                return "forbidden", ("cannot read pod logs (apply jaime-k8s-rbac.yaml)")
             if status != 200:
                 return "unreachable", f"unexpected HTTP {status} reading pod logs"
         return "ok", None
@@ -162,26 +157,22 @@ class K8sApiClient:
     def get_pod_events(self, pod_name: str, limit: int = 50) -> list[str]:
         """Return Kubernetes events for a pod as formatted text lines."""
         path = f"/api/v1/namespaces/{self.namespace}/events"
-        data = self._request(path, {
-            "fieldSelector": f"involvedObject.name={pod_name}",
-            "limit": limit,
-        })
+        data = self._request(
+            path,
+            {
+                "fieldSelector": f"involvedObject.name={pod_name}",
+                "limit": limit,
+            },
+        )
         if not isinstance(data, dict):
             return []
         lines = []
         for event in sorted(
             data.get("items", []),
-            key=lambda e: (
-                e.get("lastTimestamp")
-                or e.get("firstTimestamp")
-                or ""
-            ),
+            key=lambda e: e.get("lastTimestamp") or e.get("firstTimestamp") or "",
         ):
             ts = event.get("lastTimestamp") or event.get("firstTimestamp") or ""
-            lines.append(
-                f"{ts} {event.get('type', '')} {event.get('reason', '')} "
-                f"{event.get('message', '')}"
-            )
+            lines.append(f"{ts} {event.get('type', '')} {event.get('reason', '')} {event.get('message', '')}")
         return lines
 
     def get_resource_usage(self, pod_name: str) -> list[str]:
@@ -193,8 +184,5 @@ class K8sApiClient:
         lines = []
         for container in data.get("containers", []):
             usage = container.get("usage", {})
-            lines.append(
-                f"{container.get('name', '?')}: "
-                f"cpu={usage.get('cpu', '?')} memory={usage.get('memory', '?')}"
-            )
+            lines.append(f"{container.get('name', '?')}: cpu={usage.get('cpu', '?')} memory={usage.get('memory', '?')}")
         return lines

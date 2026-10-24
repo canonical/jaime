@@ -598,6 +598,15 @@ Report-level compaction for high-volume machine sections (kept lossy-at-render, 
 - [x] [test] Unit tests and regenerated example report
 - [x] [docs] Record the report-level compaction exception in the projection section
 
+### 4.15. Conversational suggestions (multi-turn ask)
+
+- [x] [python] Replace the single `Incident.suggestion` with a bounded append-only list of turns (fixed cap of 20, not configurable); keep old incidents readable (empty list)
+- [x] [python] Add `ask` and `list-suggestions` to `CoreMixin`: `ask` appends a turn (id/question/answer/commands/usage), `list-suggestions` prints the conversation; `get-suggestion` returns the latest turn
+- [x] [python] Multi-turn prompt: stored report + compact previous Q/A turns + current question in `run_suggest`; record the turn id in the `suggestion-generated` audit event
+- [x] [test] Unit tests: turn append/prune bound, old-incident back-compat, multi-turn prompt content, action results
+- [x] [docs] Document `ask`/`list-suggestions` and the chat-integration usage (external bots calling `ask` per turn) in `docs/reference/`
+- [x] [charm] Remove the machine-only `diagnose` action (superseded by `show-status` and `generate-report`)
+
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
 ### 5.1. Continuous integration

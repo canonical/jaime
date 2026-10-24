@@ -18,6 +18,7 @@ def _try_json(s, default=None):
     except (json.JSONDecodeError, TypeError):
         return default if default is not None else {}
 
+
 # Fixed timestamps used across tests
 SINCE = datetime.datetime(2026, 7, 13, 10, 0, 0, tzinfo=datetime.timezone.utc)
 SINCE_ISO = SINCE.isoformat()
@@ -85,14 +86,16 @@ def call_log_status(harness, goal_relations, now):
     core_logger.setLevel(logging.DEBUG)
 
     try:
-        with mock.patch("charm.goal_state", return_value=gs), \
-             mock.patch("charm.datetime") as mock_dt, \
-             mock.patch("jaime.core.datetime") as core_dt, \
-             mock.patch("charm.collect_context", return_value={}), \
-             mock.patch("jaime.core.generate_report", return_value="/tmp/test-report.md"), \
-             mock.patch("charm.write_event"), \
-             mock.patch("jaime.core.write_event"), \
-             mock.patch("builtins.open", mock.mock_open(read_data="report content")):
+        with (
+            mock.patch("charm.goal_state", return_value=gs),
+            mock.patch("charm.datetime") as mock_dt,
+            mock.patch("jaime.core.datetime") as core_dt,
+            mock.patch("charm.collect_context", return_value={}),
+            mock.patch("jaime.core.generate_report", return_value="/tmp/test-report.md"),
+            mock.patch("charm.write_event"),
+            mock.patch("jaime.core.write_event"),
+            mock.patch("builtins.open", mock.mock_open(read_data="report content")),
+        ):
             mock_dt.datetime.now.return_value = now
             mock_dt.datetime.fromisoformat = datetime.datetime.fromisoformat
             mock_dt.timezone.utc = datetime.timezone.utc
@@ -182,6 +185,7 @@ class TestFailureTimeout:
         assert "opened_at" in entry["incident"]
         # UUID format check
         import uuid
+
         uuid.UUID(entry["incident"]["id"])  # raises if invalid
 
 
@@ -204,9 +208,7 @@ class TestFlappingWorkload:
         # Juju would report only 0.0 min unhealthy each time.
         for elapsed in (30, 60, 90):
             tick = SINCE + datetime.timedelta(seconds=elapsed)
-            records = call_log_status(
-                h, make_goal_relations("blocked", since=tick), tick
-            )
+            records = call_log_status(h, make_goal_relations("blocked", since=tick), tick)
             opened += [r for r in records if _is_incident_opened(r)]
 
         # Continuous unhealthiness crosses the 1 min timeout exactly once.
@@ -230,9 +232,7 @@ class TestFlappingWorkload:
             (100, "maintenance"),
         ):
             tick = SINCE + datetime.timedelta(seconds=elapsed)
-            records = call_log_status(
-                h, make_goal_relations(status, since=tick), tick
-            )
+            records = call_log_status(h, make_goal_relations(status, since=tick), tick)
             opened += [r for r in records if _is_incident_opened(r)]
 
         assert len(opened) == 1, "flapping must not open a second incident"
@@ -248,9 +248,7 @@ class TestFlappingWorkload:
         call_log_status(h, make_goal_relations("maintenance", since=SINCE), SINCE)
 
         later = SINCE + datetime.timedelta(seconds=90)
-        records = call_log_status(
-            h, make_goal_relations("blocked", since=later), later
-        )
+        records = call_log_status(h, make_goal_relations("blocked", since=later), later)
         incident_record = next(r for r in records if _is_incident_opened(r))
         entry = json.loads(incident_record.getMessage())
         assert entry["first_seen"] == SINCE_ISO
@@ -261,15 +259,11 @@ class TestFlappingWorkload:
         call_log_status(h, make_goal_relations("blocked", since=SINCE), SINCE)
 
         recovered_at = SINCE + datetime.timedelta(seconds=30)
-        call_log_status(
-            h, make_goal_relations("active", since=recovered_at), recovered_at
-        )
+        call_log_status(h, make_goal_relations("active", since=recovered_at), recovered_at)
 
         # Unhealthy again: the timer restarts from here, so no immediate incident.
         broke_at = SINCE + datetime.timedelta(seconds=40)
-        records = call_log_status(
-            h, make_goal_relations("blocked", since=broke_at), broke_at
-        )
+        records = call_log_status(h, make_goal_relations("blocked", since=broke_at), broke_at)
         assert not any(_is_incident_opened(r) for r in records)
 
 
@@ -294,9 +288,7 @@ class TestCooldown:
 
         bumped_since = SINCE + datetime.timedelta(minutes=15)
         second_now = SINCE + datetime.timedelta(minutes=20)
-        records2 = call_log_status(
-            h, make_goal_relations("blocked", since=bumped_since), second_now
-        )
+        records2 = call_log_status(h, make_goal_relations("blocked", since=bumped_since), second_now)
         assert not any(_is_incident_opened(r) for r in records2)
         assert any(_is_cooldown(r) for r in records2)
 
@@ -396,10 +388,7 @@ class TestRecovery:
         now = SINCE + datetime.timedelta(minutes=25)
         records = call_log_status(h, make_goal_relations("active", since=recovery_since), now)
 
-        closed_events = [
-            r for r in records
-            if _try_json(r.getMessage(), {}).get("event") == "incident-closed"
-        ]
+        closed_events = [r for r in records if _try_json(r.getMessage(), {}).get("event") == "incident-closed"]
         assert len(closed_events) == 1
         entry = json.loads(closed_events[0].getMessage())
         assert "incident" in entry
@@ -478,18 +467,23 @@ class TestShowUsageAction:
     def _seed_usage(self, h, unit="postgresql/0", incident_id="abc-123"):
         """Seed a usage log entry directly into the tracker."""
         h.charm._status_tracker._state[unit] = {
-            "status": "blocked", "since": "2026-01-01T00:00:00+00:00",
-            "increment": 1, "usage_log": [],
+            "status": "blocked",
+            "since": "2026-01-01T00:00:00+00:00",
+            "increment": 1,
+            "usage_log": [],
         }
-        h.charm._status_tracker.record_usage(unit, {
-            "incident_id": incident_id,
-            "timestamp": "2026-01-01T00:01:00+00:00",
-            "model": "deepseek/deepseek-chat",
-            "prompt_tokens": 100,
-            "completion_tokens": 50,
-            "total_tokens": 150,
-            "cost_usd": 0.001,
-        })
+        h.charm._status_tracker.record_usage(
+            unit,
+            {
+                "incident_id": incident_id,
+                "timestamp": "2026-01-01T00:01:00+00:00",
+                "model": "deepseek/deepseek-chat",
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "cost_usd": 0.001,
+            },
+        )
 
     def test_no_usage_returns_message(self, tmp_path):
         h = self._make_harness(tmp_path)
@@ -540,18 +534,23 @@ class TestShowUsageAction:
     def test_no_cost_returns_null(self, tmp_path):
         h = self._make_harness(tmp_path)
         h.charm._status_tracker._state["postgresql/0"] = {
-            "status": "blocked", "since": "2026-01-01T00:00:00+00:00",
-            "increment": 1, "usage_log": [],
+            "status": "blocked",
+            "since": "2026-01-01T00:00:00+00:00",
+            "increment": 1,
+            "usage_log": [],
         }
-        h.charm._status_tracker.record_usage("postgresql/0", {
-            "incident_id": "abc-123",
-            "timestamp": "2026-01-01T00:01:00+00:00",
-            "model": "gemini-2.5-flash",
-            "prompt_tokens": 200,
-            "completion_tokens": 80,
-            "total_tokens": 280,
-            # no cost_usd — Gemini does not return cost
-        })
+        h.charm._status_tracker.record_usage(
+            "postgresql/0",
+            {
+                "incident_id": "abc-123",
+                "timestamp": "2026-01-01T00:01:00+00:00",
+                "model": "gemini-2.5-flash",
+                "prompt_tokens": 200,
+                "completion_tokens": 80,
+                "total_tokens": 280,
+                # no cost_usd - Gemini does not return cost
+            },
+        )
         action_event = mock.MagicMock()
         action_event.params = {"incident-id": ""}
         h.charm._on_action_show_usage(action_event)
@@ -564,21 +563,35 @@ class TestShowUsageAction:
         """Two calls with different models are broken down separately."""
         h = self._make_harness(tmp_path)
         h.charm._status_tracker._state["postgresql/0"] = {
-            "status": "blocked", "since": "2026-01-01T00:00:00+00:00",
-            "increment": 1, "usage_log": [],
+            "status": "blocked",
+            "since": "2026-01-01T00:00:00+00:00",
+            "increment": 1,
+            "usage_log": [],
         }
-        h.charm._status_tracker.record_usage("postgresql/0", {
-            "incident_id": "inc-1", "timestamp": "2026-01-01T00:01:00+00:00",
-            "model": "deepseek/deepseek-chat",
-            "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
-            "cost_usd": 0.001,
-        })
-        h.charm._status_tracker.record_usage("postgresql/0", {
-            "incident_id": "inc-2", "timestamp": "2026-01-01T00:02:00+00:00",
-            "model": "gemini-2.5-flash",
-            "prompt_tokens": 200, "completion_tokens": 80, "total_tokens": 280,
-            "cost_usd": 0.005,
-        })
+        h.charm._status_tracker.record_usage(
+            "postgresql/0",
+            {
+                "incident_id": "inc-1",
+                "timestamp": "2026-01-01T00:01:00+00:00",
+                "model": "deepseek/deepseek-chat",
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "cost_usd": 0.001,
+            },
+        )
+        h.charm._status_tracker.record_usage(
+            "postgresql/0",
+            {
+                "incident_id": "inc-2",
+                "timestamp": "2026-01-01T00:02:00+00:00",
+                "model": "gemini-2.5-flash",
+                "prompt_tokens": 200,
+                "completion_tokens": 80,
+                "total_tokens": 280,
+                "cost_usd": 0.005,
+            },
+        )
         action_event = mock.MagicMock()
         action_event.params = {"incident-id": ""}
         h.charm._on_action_show_usage(action_event)
@@ -596,10 +609,10 @@ class TestCollectContextAction:
         h.charm._context_dir = str(tmp_path / "incidents")
         event = mock.MagicMock()
 
-        with mock.patch.object(JaimeCharm, "_collect_report_context",
-                               return_value={"unit_logs": ["line"]}), \
-             mock.patch.object(JaimeCharm, "_principal_unit_name",
-                               return_value="ubuntu/0"):
+        with (
+            mock.patch.object(JaimeCharm, "_collect_report_context", return_value={"unit_logs": ["line"]}),
+            mock.patch.object(JaimeCharm, "_principal_unit_name", return_value="ubuntu/0"),
+        ):
             h.charm._on_action_collect_context(event)
 
         results = event.set_results.call_args[0][0]

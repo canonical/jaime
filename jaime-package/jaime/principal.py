@@ -67,13 +67,18 @@ class StatusTracker:
         self._path = state_path
         self._state: dict = self._load()
 
+    @property
+    def path(self) -> str:
+        """Path of the state file; sibling files live next to it."""
+        return self._path
+
     def _load(self) -> dict:
         try:
             with open(self._path) as f:
                 return json.load(f)
         except FileNotFoundError:
             return {}
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.warning("could not load status state from %s: %s", self._path, e)
             return {}
 
@@ -83,17 +88,14 @@ class StatusTracker:
             os.makedirs(dir_path, exist_ok=True)
             # Write to a temp file in the same directory then rename atomically
             # to avoid leaving a truncated state file if the process is killed.
-            with tempfile.NamedTemporaryFile(
-                "w", dir=dir_path, delete=False, suffix=".tmp"
-            ) as tmp:
+            with tempfile.NamedTemporaryFile("w", dir=dir_path, delete=False, suffix=".tmp") as tmp:
                 json.dump(self._state, tmp)
                 tmp_path = tmp.name
             os.rename(tmp_path, self._path)
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             logger.warning("could not save status state to %s: %s", self._path, e)
 
-    def observe(self, unit: str, status: str, since: str,
-                watched: bool = True, message: str = "") -> int:
+    def observe(self, unit: str, status: str, since: str, watched: bool = True, message: str = "") -> int:
         """Record a status observation for a unit.
 
         ``watched`` says whether ``status`` is one of the statuses that open an
@@ -184,6 +186,34 @@ class StatusTracker:
         for entry in self._state.values():
             entries.extend(entry.get("usage_log", []))
         return entries
+
+    def units(self) -> list[str]:
+        """Names of every tracked unit."""
+        return list(self._state)
+
+    def entries(self) -> list[tuple[str, dict]]:
+        """``(unit, state entry)`` pairs for every tracked unit."""
+        return list(self._state.items())
+
+    def incidents(self, incident_id: str = "", include_closed: bool = False) -> list[tuple[str, dict, dict]]:
+        """``(unit, state entry, incident)`` triples for matching incidents.
+
+        With ``incident_id`` the incident with that id is returned, open or
+        closed. Without it, only open incidents are returned unless
+        ``include_closed`` is set.
+        """
+        found = []
+        for unit, entry in self._state.items():
+            incident = entry.get("incident")
+            if not incident:
+                continue
+            if incident_id:
+                if incident["id"] != incident_id:
+                    continue
+            elif incident.get("closed_at") is not None and not include_closed:
+                continue
+            found.append((unit, entry, incident))
+        return found
 
     def has_open_incident(self, unit: str) -> bool:
         """Return True if there is an open (not yet closed) incident for a unit."""

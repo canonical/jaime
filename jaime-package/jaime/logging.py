@@ -92,17 +92,20 @@ def list_incidents(audit_log_path: str = "", unit: str = "") -> list[dict]:
                     continue
                 if unit and event.get("unit") != unit:
                     continue
-                record = by_id.setdefault(incident_id, {
-                    "incident_id": incident_id,
-                    "unit": event.get("unit", ""),
-                    "workload": "",
-                    "status_message": event.get("status_message", ""),
-                    "first_seen": "",
-                    "status_since": "",
-                    "opened_at": "",
-                    "report_path": "",
-                    "closed_at": None,
-                })
+                record = by_id.setdefault(
+                    incident_id,
+                    {
+                        "incident_id": incident_id,
+                        "unit": event.get("unit", ""),
+                        "workload": "",
+                        "status_message": event.get("status_message", ""),
+                        "first_seen": "",
+                        "status_since": "",
+                        "opened_at": "",
+                        "report_path": "",
+                        "closed_at": None,
+                    },
+                )
                 kind = event.get("event")
                 if kind == "incident-start":
                     record["workload"] = event.get("workload", "")

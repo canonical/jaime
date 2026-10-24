@@ -21,9 +21,7 @@ def _make_client():
 class TestK8sApiClient:
     def test_list_pods_returns_items(self):
         client = _make_client()
-        with mock.patch.object(client, "_request", return_value={
-            "items": [{"metadata": {"name": "app-0"}}]
-        }):
+        with mock.patch.object(client, "_request", return_value={"items": [{"metadata": {"name": "app-0"}}]}):
             pods = client.list_pods()
         assert pods == [{"metadata": {"name": "app-0"}}]
 
@@ -103,13 +101,20 @@ class TestK8sApiClient:
 
     def test_get_pod_events_formats_lines(self):
         client = _make_client()
-        with mock.patch.object(client, "_request", return_value={
-            "items": [
-                {"type": "Warning", "reason": "BackOff",
-                 "message": "Back-off restarting failed container",
-                 "lastTimestamp": "2026-08-18T10:05:00Z"},
-            ],
-        }):
+        with mock.patch.object(
+            client,
+            "_request",
+            return_value={
+                "items": [
+                    {
+                        "type": "Warning",
+                        "reason": "BackOff",
+                        "message": "Back-off restarting failed container",
+                        "lastTimestamp": "2026-08-18T10:05:00Z",
+                    },
+                ],
+            },
+        ):
             events = client.get_pod_events("app-0")
         assert len(events) == 1
         assert "BackOff" in events[0]
@@ -118,15 +123,26 @@ class TestK8sApiClient:
     def test_get_pod_events_handles_none_timestamps(self):
         """Events with a missing/None lastTimestamp must not break sorting."""
         client = _make_client()
-        with mock.patch.object(client, "_request", return_value={
-            "items": [
-                {"type": "Warning", "reason": "Scheduled",
-                 "message": "Successfully assigned", "lastTimestamp": None},
-                {"type": "Normal", "reason": "Pulled",
-                 "message": "Container image pulled",
-                 "firstTimestamp": "2026-08-18T10:00:00Z"},
-            ],
-        }):
+        with mock.patch.object(
+            client,
+            "_request",
+            return_value={
+                "items": [
+                    {
+                        "type": "Warning",
+                        "reason": "Scheduled",
+                        "message": "Successfully assigned",
+                        "lastTimestamp": None,
+                    },
+                    {
+                        "type": "Normal",
+                        "reason": "Pulled",
+                        "message": "Container image pulled",
+                        "firstTimestamp": "2026-08-18T10:00:00Z",
+                    },
+                ],
+            },
+        ):
             events = client.get_pod_events("app-0")
         assert len(events) == 2
         assert any("Scheduled" in e for e in events)
@@ -148,19 +164,28 @@ class TestCheckAccess:
 
     def test_ok_when_pods_and_logs_readable(self):
         client = _make_client()
-        with mock.patch.object(client, "_request_raw", self._raw(
-            (200, "{}", "application/json"),
-            (200, "log", "text/plain"),
-        )), mock.patch.object(client, "list_pods", return_value=[
-            {"metadata": {"name": "app-0"}}
-        ]):
+        with (
+            mock.patch.object(
+                client,
+                "_request_raw",
+                self._raw(
+                    (200, "{}", "application/json"),
+                    (200, "log", "text/plain"),
+                ),
+            ),
+            mock.patch.object(client, "list_pods", return_value=[{"metadata": {"name": "app-0"}}]),
+        ):
             assert client.check_access() == ("ok", None)
 
     def test_forbidden_when_pod_list_denied(self):
         client = _make_client()
-        with mock.patch.object(client, "_request_raw", self._raw(
-            (403, "Forbidden", "application/json"),
-        )):
+        with mock.patch.object(
+            client,
+            "_request_raw",
+            self._raw(
+                (403, "Forbidden", "application/json"),
+            ),
+        ):
             kind, detail = client.check_access()
         assert kind == "forbidden"
         assert "list pods" in detail
@@ -168,38 +193,58 @@ class TestCheckAccess:
     def test_forbidden_when_pod_logs_denied(self):
         """The shipped RoleBinding is needed for logs; default SA gets 403."""
         client = _make_client()
-        with mock.patch.object(client, "_request_raw", self._raw(
-            (200, "{}", "application/json"),
-            (403, "Forbidden", "text/plain"),
-        )), mock.patch.object(client, "list_pods", return_value=[
-            {"metadata": {"name": "app-0"}}
-        ]):
+        with (
+            mock.patch.object(
+                client,
+                "_request_raw",
+                self._raw(
+                    (200, "{}", "application/json"),
+                    (403, "Forbidden", "text/plain"),
+                ),
+            ),
+            mock.patch.object(client, "list_pods", return_value=[{"metadata": {"name": "app-0"}}]),
+        ):
             kind, detail = client.check_access()
         assert kind == "forbidden"
         assert "pod logs" in detail
 
     def test_unreachable_on_transport_error(self):
         client = _make_client()
-        with mock.patch.object(client, "_request_raw", self._raw(
-            (None, None, None),
-        )):
+        with mock.patch.object(
+            client,
+            "_request_raw",
+            self._raw(
+                (None, None, None),
+            ),
+        ):
             kind, detail = client.check_access()
         assert kind == "unreachable"
 
     def test_unreachable_on_unexpected_status(self):
         client = _make_client()
-        with mock.patch.object(client, "_request_raw", self._raw(
-            (503, "Service Unavailable", "text/plain"),
-        )):
+        with mock.patch.object(
+            client,
+            "_request_raw",
+            self._raw(
+                (503, "Service Unavailable", "text/plain"),
+            ),
+        ):
             kind, detail = client.check_access()
         assert kind == "unreachable"
 
     def test_ok_when_no_pods_to_probe_logs(self):
         """An empty namespace cannot test logs, but the API itself is fine."""
         client = _make_client()
-        with mock.patch.object(client, "_request_raw", self._raw(
-            (200, "{}", "application/json"),
-        )), mock.patch.object(client, "list_pods", return_value=[]):
+        with (
+            mock.patch.object(
+                client,
+                "_request_raw",
+                self._raw(
+                    (200, "{}", "application/json"),
+                ),
+            ),
+            mock.patch.object(client, "list_pods", return_value=[]),
+        ):
             assert client.check_access() == ("ok", None)
 
 
@@ -242,10 +287,14 @@ _POD = {
         "qosClass": "Burstable",
         "conditions": [{"type": "Ready", "status": "True"}],
         "containerStatuses": [
-            {"name": "charm", "image": "jujusolutions/charm:3.6", "ready": True,
-             "restartCount": 0, "state": {"running": {}}},
-            {"name": "postgresql", "image": "postgres:16", "ready": False,
-             "restartCount": 3, "state": {"waiting": {}}},
+            {
+                "name": "charm",
+                "image": "jujusolutions/charm:3.6",
+                "ready": True,
+                "restartCount": 0,
+                "state": {"running": {}},
+            },
+            {"name": "postgresql", "image": "postgres:16", "ready": False, "restartCount": 3, "state": {"waiting": {}}},
         ],
     },
 }
@@ -351,16 +400,25 @@ class TestContainerDetail:
         "spec": {"containers": [{"name": "workload", "image": "app:1"}]},
         "status": {
             "phase": "Running",
-            "containerStatuses": [{
-                "name": "workload", "image": "app:1", "ready": False,
-                "restartCount": 4,
-                "state": {"waiting": {"reason": "CrashLoopBackOff"}},
-                "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137}},
-            }],
-            "initContainerStatuses": [{
-                "name": "init-db", "image": "busybox", "ready": True, "restartCount": 0,
-                "state": {"terminated": {"reason": "Completed", "exitCode": 0}},
-            }],
+            "containerStatuses": [
+                {
+                    "name": "workload",
+                    "image": "app:1",
+                    "ready": False,
+                    "restartCount": 4,
+                    "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                    "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137}},
+                }
+            ],
+            "initContainerStatuses": [
+                {
+                    "name": "init-db",
+                    "image": "busybox",
+                    "ready": True,
+                    "restartCount": 0,
+                    "state": {"terminated": {"reason": "Completed", "exitCode": 0}},
+                }
+            ],
         },
     }
 
@@ -470,10 +528,12 @@ class TestCollectContextPlan:
 
     def test_ports_declared_and_missing(self):
         ctx, _ = self._ctx(
-            plan={"ports": [
-                {"port": 5432, "protocol": "tcp"},
-                {"port": 6432, "protocol": "tcp"},
-            ]}
+            plan={
+                "ports": [
+                    {"port": 5432, "protocol": "tcp"},
+                    {"port": 6432, "protocol": "tcp"},
+                ]
+            }
         )
         items = ctx["plan_results"]["network_ports"]["items"]
         assert items == [

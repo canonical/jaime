@@ -24,15 +24,13 @@ def truncate_line(line: str, max_chars: int = MAX_LINE_CHARS) -> str:
     return line[:max_chars] + f" … (+{len(line) - max_chars} chars truncated)"
 
 
-def cap_lines(lines: list[str], max_lines: int,
-              max_chars: int = MAX_LINE_CHARS) -> list[str]:
+def cap_lines(lines: list[str], max_lines: int, max_chars: int = MAX_LINE_CHARS) -> list[str]:
     """Tail-bound to ``max_lines`` and truncate every line to ``max_chars``."""
     tail = lines[-max_lines:] if len(lines) > max_lines else lines
     return [truncate_line(line, max_chars) for line in tail]
 
 
-def filter_error_context(lines: list[str], max_lines: int,
-                         context_window: int = 3) -> list[str]:
+def filter_error_context(lines: list[str], max_lines: int, context_window: int = 3) -> list[str]:
     """Keep error/warning lines plus a context window around each match.
 
     Fetching a log tail via the k8s API (``tailLines``) always returns the
@@ -61,16 +59,16 @@ def tail_lines(text: str, max_lines: int) -> list[str]:
 
 def line_pattern(line: str) -> str:
     """Strip variable tokens from a log line to get its structural pattern."""
-    s = re.sub(r'\d{4}-\d{2}-\d{2}T[\d:.+Z]+', 'TS', line)
-    s = re.sub(r'\[\d+\]', '[N]', s)
-    s = re.sub(r'\b0x[0-9a-fA-F]+\b', 'HEX', s)
-    s = re.sub(r'\b[0-9a-fA-F]{8,}\b', 'HEX', s)
-    s = re.sub(r'\b\d+\b', 'N', s)
+    s = re.sub(r"\d{4}-\d{2}-\d{2}T[\d:.+Z]+", "TS", line)
+    s = re.sub(r"\[\d+\]", "[N]", s)
+    s = re.sub(r"\b0x[0-9a-fA-F]+\b", "HEX", s)
+    s = re.sub(r"\b[0-9a-fA-F]{8,}\b", "HEX", s)
+    s = re.sub(r"\b\d+\b", "N", s)
     # normalize each path segment (word after /) so /sys/module/foo/uevent
     # and /sys/module/bar/uevent both become /P/P/P/P
-    s = re.sub(r'(?<=/)\w[\w.-]*(?=[/\'"\s]|$)', 'P', s)
+    s = re.sub(r'(?<=/)\w[\w.-]*(?=[/\'"\s]|$)', "P", s)
     # collapse variable identifier before ': LEVEL' (e.g. udevadm module names)
-    s = re.sub(r'\b\w+: (Failed|Warning|Error)', r'TOKEN: \1', s)
+    s = re.sub(r"\b\w+: (Failed|Warning|Error)", r"TOKEN: \1", s)
     return s
 
 
@@ -114,7 +112,7 @@ def _collapse_runs(lines: list[str], threshold: int = 3) -> list[str]:
                 j += L
             count = (j - i) // L
             if count >= threshold:
-                result.extend(lines[i:i + L])
+                result.extend(lines[i : i + L])
                 omitted = count - 1
                 if omitted > 0:
                     label = "lines" if L == 1 else "repetitions"

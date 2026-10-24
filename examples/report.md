@@ -15,9 +15,8 @@ Unit is in **blocked** state.
 2026-07-14 09:57:00 ERROR unit.postgresql/0.juju-log Hook start failed: disk full
 ```
 
-**Charm options with non-empty schema defaults:**
-- `max_connections`: `100`
-- `port`: `5432`
+**Config changed from default by operator:**
+- `max_connections`: `50` (default: `100`)
 
 ## Network ports
 - `5432/tcp` → not_listening ✗
@@ -43,56 +42,39 @@ Status: active
 ```
 
 ## Log files
-
 - /var/log/postgresql/postgresql-16-main.log (high) — _Main PostgreSQL log_ ✓
-
 ```
 2026-07-14 09:55:01 UTC [12345] LOG:  received SIGHUP, reloading configuration files
 2026-07-14 09:56:00 UTC [12346] WARNING:  database "app" has no active replicas
 2026-07-14 09:57:30 UTC [12347] ERROR:  out of disk space on primary
 ```
-
 - /var/log/postgresql/postgresql-16-main.log.1 (medium) — _Rotated PostgreSQL log (recent)_ ✓
-
 ```
 2026-07-14 09:50:00 UTC [12340] LOG:  checkpoint starting: time
 2026-07-14 09:52:00 UTC [12341] LOG:  checkpoint complete: wrote 42 buffers
 ```
-
 - /var/log/postgresql/pg_stat_statements.log (low) — _Query statistics log_ ✗ (not_found)
 
 ## Processes
-
 - **postgres**: 0 running (expected 1-4) ✗
-
 - **pgbouncer**: 1 running (expected 1-1) ✓
 
 ## Systemd units
-
 - `postgresql@16-main.service` → failed (dead, restarts=3, exec=1) ✗
-
 - `postgresql-exporter.service` → active (running) ✓
 
 ## Environment variables
-
 _Only whether each variable is set; values are never collected._
-
 - `PGDATA` — set ✓
-
 - `PGPORT` — set ✓
-
 - `POSTGRES_PASSWORD` — unset ✗
 
 ## Health commands
-
 - `$ systemctl is-active postgresql@16-main.service` → exit 1 ✗
-
   ```
 inactive
   ```
-
 - `$ pg_isready -h localhost -p 5432` → exit 2 ✗
-
   ```
 /tmp:5432 - no response
   ```
@@ -123,8 +105,10 @@ vault.vaultd                     disabled  inactive  -
 ```
 
 ## Charm config
-- `max_connections`: `100`
-- `port`: `5432`
+```
+max_connections: 50  # changed from default (100)
+port: 5432
+```
 
 ## Available actions
 ```yaml

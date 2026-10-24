@@ -44,12 +44,12 @@ class TestOpenRouterInit:
 
 
 class TestOpenRouterCheck:
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_check_success_returns_none(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen_response(b'{"data": {}}')
         assert OpenRouterProvider("test-token").check() is None
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_check_sends_bearer_token(self, mock_urlopen):
         mock_urlopen.return_value = _mock_urlopen_response(b"{}")
         OpenRouterProvider("secret-token").check()
@@ -58,7 +58,7 @@ class TestOpenRouterCheck:
         assert req.get_header("Authorization") == "Bearer secret-token"
         assert req.get_method() == "GET"
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_check_http_error_returns_message(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(401, b"unauthorized")
         result = OpenRouterProvider("bad-token").check()
@@ -67,7 +67,7 @@ class TestOpenRouterCheck:
         assert "HTTP 401" in result
         assert "unauthorized" in result
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_check_connection_error_returns_message(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.URLError("connection failed")
         result = OpenRouterProvider("test-token").check()
@@ -75,7 +75,7 @@ class TestOpenRouterCheck:
         assert result is not None
         assert "connection error" in result
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_check_never_leaks_token_in_message(self, mock_urlopen):
         """A failed check must not echo the API token back to the caller."""
         mock_urlopen.side_effect = _http_error(403, b"forbidden")
@@ -85,17 +85,19 @@ class TestOpenRouterCheck:
 
 
 class TestOpenRouterGenerate:
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_success(self, mock_urlopen):
-        payload = json.dumps({
-            "choices": [{"message": {"content": "Hello from OpenRouter"}}],
-            "usage": {
-                "prompt_tokens": 12,
-                "completion_tokens": 7,
-                "total_tokens": 19,
-                "cost": 0.00042,
-            },
-        }).encode()
+        payload = json.dumps(
+            {
+                "choices": [{"message": {"content": "Hello from OpenRouter"}}],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 7,
+                    "total_tokens": 19,
+                    "cost": 0.00042,
+                },
+            }
+        ).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
 
         provider = OpenRouterProvider("test-token")
@@ -109,11 +111,13 @@ class TestOpenRouterGenerate:
         assert usage.cost_usd == 0.00042
         assert usage.model == "~deepseek/deepseek-v4-flash-latest"
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_posts_model_and_prompt(self, mock_urlopen):
-        payload = json.dumps({
-            "choices": [{"message": {"content": "ok"}}],
-        }).encode()
+        payload = json.dumps(
+            {
+                "choices": [{"message": {"content": "ok"}}],
+            }
+        ).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
 
         provider = OpenRouterProvider("test-token", "custom/model")
@@ -125,12 +129,14 @@ class TestOpenRouterGenerate:
         assert body["model"] == "custom/model"
         assert body["messages"] == [{"role": "user", "content": "diagnose this"}]
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_missing_usage_returns_zeros(self, mock_urlopen):
         """When usage is absent, token counts default to zero and cost is None."""
-        payload = json.dumps({
-            "choices": [{"message": {"content": "Hello"}}],
-        }).encode()
+        payload = json.dumps(
+            {
+                "choices": [{"message": {"content": "Hello"}}],
+            }
+        ).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
 
         text, usage = OpenRouterProvider("test-token").generate("say hello")
@@ -141,18 +147,20 @@ class TestOpenRouterGenerate:
         assert usage.total_tokens == 0
         assert usage.cost_usd is None
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_null_content_returns_empty_string(self, mock_urlopen):
         """Tool-call responses carry content: null; that must not become 'None'."""
-        payload = json.dumps({
-            "choices": [{"message": {"content": None}}],
-        }).encode()
+        payload = json.dumps(
+            {
+                "choices": [{"message": {"content": None}}],
+            }
+        ).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
 
         text, _ = OpenRouterProvider("test-token").generate("test")
         assert text == ""
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_missing_message_returns_empty_string(self, mock_urlopen):
         payload = json.dumps({"choices": [{}]}).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
@@ -160,7 +168,7 @@ class TestOpenRouterGenerate:
         text, _ = OpenRouterProvider("test-token").generate("test")
         assert text == ""
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_no_choices_raises(self, mock_urlopen):
         payload = json.dumps({"choices": []}).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
@@ -169,7 +177,7 @@ class TestOpenRouterGenerate:
         with pytest.raises(RuntimeError, match="no choices"):
             provider.generate("test")
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_http_error_raises(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(400)
 
@@ -177,7 +185,7 @@ class TestOpenRouterGenerate:
         with pytest.raises(urllib.error.HTTPError):
             provider.generate("test")
 
-    @patch("jaime.providers.openrouter.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_url_error_raises(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.URLError("connection failed")
 

@@ -21,13 +21,10 @@ from jaime.collector import collect_context
 from jaime.controller import (
     ControllerAuthError,
     ControllerError,
-    JujuControllerClient,
-    agent_conf_path,
     extract_app_metadata,
     extract_unit_statuses,
-    parse_agent_conf,
 )
-from jaime.core import CoreMixin
+from jaime.core import CREDENTIALS_REJECTED, CREDENTIALS_REQUIRED, CoreMixin
 from jaime.diagnostics import validate_k8s_diagnostics
 from jaime.incident import Incident
 from jaime.k8s_api import K8sApiClient
@@ -51,6 +48,8 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         self.framework.observe(self.on.show_usage_action, self._on_action_show_usage)
         self.framework.observe(self.on.show_setup_steps_action, self._on_action_show_setup_steps)
         self.framework.observe(self.on.get_suggestion_action, self._on_action_get_suggestion)
+        self.framework.observe(self.on.ask_action, self._on_action_ask)
+        self.framework.observe(self.on.list_suggestions_action, self._on_action_list_suggestions)
         self.framework.observe(self.on.generate_report_action, self._on_action_generate_report)
         self.framework.observe(self.on.list_incidents_action, self._on_action_list_incidents)
         self.framework.observe(self.on.reset_action, self._on_action_reset)
@@ -69,12 +68,15 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         plan, diag_error = self._parse_diagnostics_config()
         if diag_error:
             self.unit.status = BlockedStatus(f"invalid diagnostics config: {diag_error}")
-            write_event({
-                "event": "diagnostics-config-invalid",
-                "unit": self.unit.name,
-                "error": diag_error,
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            }, self.model.config.get("audit-log-path", ""))
+            write_event(
+                {
+                    "event": "diagnostics-config-invalid",
+                    "unit": self.unit.name,
+                    "error": diag_error,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                },
+                self.model.config.get("audit-log-path", ""),
+            )
             return
         if plan:
             unknown = sorted(set(plan) - set(self._watch_applications()))
@@ -127,7 +129,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         keeps the answer correct outside a monitoring cycle.
         """
         watch = set(self._watch_applications())
-        tracked = {name.split("/")[0] for name in self._status_tracker._state}
+        tracked = {name.split("/")[0] for name in self._status_tracker.units()}
         return sorted(app for app in tracked if app in watch)
 
     def _prerequisite_error(self) -> str | None:
@@ -150,24 +152,15 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         """
 
         # 1. Observer credentials must be configured.
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            return "juju-api-user and juju-api-password must be configured"
+        if not self._has_controller_credentials():
+            return CREDENTIALS_REQUIRED
 
         # 2. The controller must be reachable and the credentials accepted.
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            return None
         try:
-            conf = parse_agent_conf(conf_path)
-            with JujuControllerClient(
-                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-            ) as client:
-                client.login(username, password)
+            with self._controller_session() as client:
                 full = client.full_status()
         except ControllerAuthError:
-            return "juju-api credentials rejected by controller"
+            return CREDENTIALS_REJECTED
         except Exception as e:
             logger.debug("controller prerequisite check failed: %s", e)
             return None
@@ -190,17 +183,8 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         present = set(full.get("applications") or {})
         missing = [a for a in self._watch_applications() if a not in present]
         if missing:
-            return (
-                "watch-applications not found on model: "
-                + ", ".join(missing)
-            )
+            return "watch-applications not found on model: " + ", ".join(missing)
         return None
-
-    def _resolve_juju_password(self) -> str:
-        """Resolve the Juju API password from config (plain or secret URI)."""
-        return self._resolve_secret(
-            self.model.config.get("juju-api-password", ""), "password"
-        )
 
     def _monitor(self):
         """Fetch statuses and drive the incident lifecycle for each unit."""
@@ -222,18 +206,14 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         # Monitoring is opt-in: an empty watch-applications list means nothing
         # is monitored, never "all applications in the model".
         if not self._watch_applications():
-            self.unit.status = ActiveStatus(
-                "Ready: no apps in watch-applications"
-            )
+            self.unit.status = ActiveStatus("Ready: no apps in watch-applications")
             return
 
         try:
             statuses = self._fetch_unit_statuses()
         except ControllerAuthError as e:
             logger.error("Juju controller authentication failed: %s", e)
-            self.unit.status = BlockedStatus(
-                "juju-api credentials rejected by controller"
-            )
+            self.unit.status = BlockedStatus("juju-api credentials rejected by controller")
             return
         except ControllerError as e:
             logger.warning("could not fetch unit statuses: %s", e)
@@ -248,9 +228,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         for unit_name, info in statuses.items():
             status = info["status"]
             since_iso = info["since"] or now.isoformat()
-            self._process_unit(
-                unit_name, status, since_iso, info.get("message", "")
-            )
+            self._process_unit(unit_name, status, since_iso, info.get("message", ""))
 
     # ------------------------------------------------------------------
     # Juju controller access
@@ -258,22 +236,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
     def _fetch_unit_statuses(self) -> dict[str, dict]:
         """Fetch per-unit workload statuses from the Juju controller API."""
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            raise ControllerError(
-                "juju-api-user and juju-api-password must be configured"
-            )
-
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            raise ControllerError("agent.conf not found: cannot locate controller")
-
-        conf = parse_agent_conf(conf_path)
-        with JujuControllerClient(
-            conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-        ) as client:
-            client.login(username, password)
+        with self._controller_session() as client:
             full = client.full_status()
         return extract_unit_statuses(
             full,
@@ -282,45 +245,19 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
     def _fetch_app_config(self, app_name: str) -> dict:
         """Fetch an application's current config from the controller API."""
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            return {}
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            return {}
-        try:
-            conf = parse_agent_conf(conf_path)
-            with JujuControllerClient(
-                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-            ) as client:
-                client.login(username, password)
-                info = client.application_get(app_name)
-            return info.get("config", {})
-        except Exception as e:
-            logger.debug("could not fetch config for %s: %s", app_name, e)
-            return {}
+        return self._controller_query(
+            lambda client: client.application_get(app_name).get("config", {}),
+            {},
+            f"config for {app_name}",
+        )
 
     def _fetch_app_metadata(self, app_name: str) -> dict:
         """Fetch an application's charm metadata for the report header."""
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            return {}
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            return {}
-        try:
-            conf = parse_agent_conf(conf_path)
-            with JujuControllerClient(
-                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-            ) as client:
-                client.login(username, password)
-                full = client.full_status()
-            return extract_app_metadata(full, app_name)
-        except Exception as e:
-            logger.debug("could not fetch app metadata for %s: %s", app_name, e)
-            return {}
+        return self._controller_query(
+            lambda client: extract_app_metadata(client.full_status(), app_name),
+            {},
+            f"app metadata for {app_name}",
+        )
 
     # ------------------------------------------------------------------
     # Setup guidance
@@ -340,41 +277,40 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         """
         app = self.app.name
         model = self.model.name or "<your-model-name>"
-        rbac_url = (
-            "https://raw.githubusercontent.com/canonical/jaime/main/"
-            "charms/k8s/jaime-k8s-rbac.yaml"
+        rbac_url = "https://raw.githubusercontent.com/canonical/jaime/main/charms/k8s/jaime-k8s-rbac.yaml"
+        return "\n".join(
+            (
+                "# Jaime k8s setup guide: run on a machine with Juju and kubectl access.",
+                "# Replace the <...> placeholders first.",
+                "",
+                f"MODEL_NAME={model}",
+                "",
+                "# 1. Kubernetes RBAC: pod logs/events/metrics read access. The required Role/RoleBinding live",
+                "#    in the repository and are applied straight from there.",
+                f"kubectl apply -f {rbac_url} -n ${{MODEL_NAME}}",
+                "",
+                "# 2. Read-only Juju user for the controller API.",
+                "juju add-user jaime-observer",
+                "juju grant jaime-observer read ${MODEL_NAME}",
+                "# Generate a password on the spot, or set your own here.",
+                "NEW_PASS=$(openssl rand -hex 16)",
+                'echo "$NEW_PASS" | juju change-user-password jaime-observer --no-prompt',
+                "",
+                "# 3. Pass the observer credentials to the charm as a Juju secret.",
+                'SECRET_URI=$(juju add-secret jaime-juju-api password="$NEW_PASS")',
+                f"juju grant-secret jaime-juju-api {app}",
+                f'juju config {app} juju-api-user=jaime-observer juju-api-password="${{SECRET_URI}}"',
+                "",
+                "# 4. Choose which applications to monitor. Monitoring is opt-in:",
+                "#    empty watches nothing, never everything.",
+                f"juju config {app} watch-applications=postgresql-k8s,mysql-k8s",
+                "",
+                "# 5. Optional: enable AI suggestions. Grant the token secret to the application",
+                "AI_SECRET=$(juju add-secret jaime-token token=<your-api-token>)",
+                f"juju grant-secret jaime-token {app}",
+                f'juju config {app} mode=suggest provider=openrouter api-token="${{AI_SECRET}}"',
+            )
         )
-        return "\n".join((
-            "# Jaime k8s setup guide: run on a machine with Juju and kubectl access.",
-            "# Replace the <...> placeholders first.",
-            "",
-            f"MODEL_NAME={model}",
-            "",
-            "# 1. Kubernetes RBAC: pod logs/events/metrics read access. The required Role/RoleBinding live",
-            "#    in the repository and are applied straight from there.",
-            f"kubectl apply -f {rbac_url} -n ${{MODEL_NAME}}",
-            "",
-            "# 2. Read-only Juju user for the controller API.",
-            "juju add-user jaime-observer",
-            "juju grant jaime-observer read ${MODEL_NAME}",
-            "# Generate a password on the spot, or set your own here.",
-            "NEW_PASS=$(openssl rand -hex 16)",
-            'echo "$NEW_PASS" | juju change-user-password jaime-observer --no-prompt',
-            "",
-            "# 3. Pass the observer credentials to the charm as a Juju secret.",
-            'SECRET_URI=$(juju add-secret jaime-juju-api password="$NEW_PASS")',
-            f"juju grant-secret jaime-juju-api {app}",
-            f'juju config {app} juju-api-user=jaime-observer juju-api-password="${{SECRET_URI}}"',
-            "",
-            "# 4. Choose which applications to monitor. Monitoring is opt-in:",
-            "#    empty watches nothing, never everything.",
-            f"juju config {app} watch-applications=postgresql-k8s,mysql-k8s",
-            "",
-            "# 5. Optional: enable AI suggestions. Grant the token secret to the application",
-            "AI_SECRET=$(juju add-secret jaime-token token=<your-api-token>)",
-            f"juju grant-secret jaime-token {app}",
-            f'juju config {app} mode=suggest provider=openrouter api-token="${{AI_SECRET}}"',
-        ))
 
     def _on_action_show_setup_steps(self, event):
         """Emit the exact setup steps for this charm. Read-only."""
@@ -384,8 +320,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
     # Substrate hooks used by CoreMixin
     # ------------------------------------------------------------------
 
-    def _collect_incident_context(self, unit_name: str, since_iso: str,
-                                  incident: Incident) -> dict:
+    def _collect_incident_context(self, unit_name: str, since_iso: str, incident: Incident) -> dict:
         """Collect Kubernetes diagnostic context (pod logs, spec, events)."""
         log_window = self.model.config.get("log-window-minutes", 30)
         max_lines = self.model.config.get("max-context-lines", 500)
@@ -395,7 +330,10 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
             since_dt = None
 
         context = collect_context(
-            unit_name, log_window, max_lines, from_time=since_dt,
+            unit_name,
+            log_window,
+            max_lines,
+            from_time=since_dt,
             diagnostics_plan=self._app_diagnostics_plan(unit_name.split("/")[0]),
         )
         app_name = unit_name.split("/")[0]
@@ -412,7 +350,10 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         except ValueError:
             since_dt = None
         context = collect_context(
-            unit_name, log_window, max_lines, from_time=since_dt,
+            unit_name,
+            log_window,
+            max_lines,
+            from_time=since_dt,
             diagnostics_plan=self._app_diagnostics_plan(unit_name.split("/")[0]),
         )
         app_name = unit_name.split("/")[0]

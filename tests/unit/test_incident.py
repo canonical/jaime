@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from jaime.incident import Incident, Suggestion, UsageMetadata
+from jaime.incident import Incident, Suggestion, Turn, UsageMetadata
 
 
 class TestIncidentOpen:
@@ -192,8 +192,9 @@ class TestUsageMetadata:
         assert d["cost_usd"] == 0.001234
 
     def test_from_dict_roundtrip(self):
-        u = UsageMetadata(prompt_tokens=100, completion_tokens=50, total_tokens=150,
-                          cost_usd=0.005, model="deepseek/deepseek-chat")
+        u = UsageMetadata(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150, cost_usd=0.005, model="deepseek/deepseek-chat"
+        )
         restored = UsageMetadata.from_dict(u.to_dict())
         assert restored.prompt_tokens == 100
         assert restored.completion_tokens == 50
@@ -205,8 +206,9 @@ class TestUsageMetadata:
         assert u.cost_usd is None
 
     def test_suggestion_carries_usage_in_roundtrip(self):
-        usage = UsageMetadata(prompt_tokens=10, completion_tokens=5, total_tokens=15,
-                              cost_usd=0.001, model="gemini-2.5-flash")
+        usage = UsageMetadata(
+            prompt_tokens=10, completion_tokens=5, total_tokens=15, cost_usd=0.001, model="gemini-2.5-flash"
+        )
         s = Suggestion.from_llm("desc", ["cmd"], usage=usage)
         restored = Suggestion.from_dict(s.to_dict())
         assert restored.usage is not None
@@ -218,3 +220,84 @@ class TestUsageMetadata:
         assert s.usage is None
         restored = Suggestion.from_dict(s.to_dict())
         assert restored.usage is None
+
+
+class TestTurns:
+    def test_attach_appends_turn_and_preserves_history(self):
+        inc = Incident.open("blocked")
+        t1 = Suggestion.from_llm("first", ["cmd1"])
+        t2 = Suggestion.from_llm("second", ["cmd2"])
+        inc = inc.attach_suggestion(t1).attach_suggestion(t2)
+        assert len(inc.turns) == 2
+        assert inc.turns[0].description == "first"
+        assert inc.turns[1].description == "second"
+        # Legacy single-shot view reflects the latest turn.
+        assert inc.suggestion.description == "second"
+        assert inc.suggestion.commands == ("cmd2",)
+
+    def test_roundtrip_preserves_turns(self):
+        inc = Incident.open("blocked")
+        inc = inc.attach_suggestion(Suggestion.from_llm("a", ["x"]))
+        restored = Incident.from_dict(inc.to_dict())
+        assert len(restored.turns) == 1
+        assert restored.suggestion.description == "a"
+
+    def test_legacy_suggestion_migrates_to_one_turn(self):
+        old = {
+            "id": "abc",
+            "opened_at": "2026-01-01T00:00:00+00:00",
+            "suggestion": {"description": "legacy", "commands": ["y"], "generated_at": "2026-01-01T00:00:01+00:00"},
+        }
+        restored = Incident.from_dict(old)
+        assert len(restored.turns) == 1
+        assert restored.turns[0].question == ""
+        assert restored.turns[0].description == "legacy"
+
+    def test_prune_keeps_newest(self):
+        inc = Incident.open("blocked")
+        for i in range(5):
+            inc = inc.attach_suggestion(Suggestion.from_llm(f"turn-{i}", [f"cmd-{i}"]))
+        pruned = inc.prune_turns(2)
+        assert [t.description for t in pruned.turns] == ["turn-3", "turn-4"]
+
+    def test_turn_from_suggestion_carries_question(self):
+        t = Turn.from_suggestion(Suggestion.from_llm("d", ["c"]), question="why?")
+        assert t.question == "why?"
+        d = t.to_dict()
+        assert d["question"] == "why?"
+        assert Turn.from_dict(d).question == "why?"
+
+    def test_turn_ids_increment_from_one(self):
+        inc = Incident.open("blocked")
+        for i in range(3):
+            inc = inc.attach_suggestion(Suggestion.from_llm(f"t{i}", []))
+        assert [t.id for t in inc.turns] == [1, 2, 3]
+        assert inc.next_turn_id == 4
+
+    def test_turn_ids_never_reused_after_prune(self):
+        inc = Incident.open("blocked")
+        for i in range(5):
+            inc = inc.attach_suggestion(Suggestion.from_llm(f"t{i}", []))
+        inc = Incident.from_dict(inc.prune_turns(2).to_dict())
+        inc = inc.attach_suggestion(Suggestion.from_llm("next", []))
+        assert [t.id for t in inc.turns] == [4, 5, 6]
+
+    def test_incident_dict_is_json_serializable(self):
+        import json
+
+        inc = Incident.open("blocked").attach_suggestion(Suggestion.from_llm("a", []))
+        assert json.loads(json.dumps(inc.to_dict()))["turns"][0]["id"] == 1
+
+    def test_legacy_suggestion_continues_numbering(self):
+        old = {
+            "id": "abc",
+            "opened_at": "2026-01-01T00:00:00+00:00",
+            "suggestion": {"description": "legacy", "generated_at": "2026-01-01T00:00:01+00:00"},
+        }
+        restored = Incident.from_dict(old)
+        assert restored.turns[0].id == 1
+        assert restored.next_turn_id == 2
+
+    def test_prune_to_zero_drops_all(self):
+        inc = Incident.open("blocked").attach_suggestion(Suggestion.from_llm("a", []))
+        assert inc.prune_turns(0).turns == ()

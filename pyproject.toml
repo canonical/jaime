@@ -28,7 +28,7 @@ source = ["jaime-package"]
 # Generated and vendored trees are not prose. Skipping them keeps a false
 # positive in machine output (for example the generated example report) from
 # failing the docs check.
-skip = "*.charm,dist,examples,node_modules,.venv,.tox,.git,.coding_sessions"
+skip = "*.charm,dist,examples,node_modules,.venv,.tox,.git,.coding_sessions,_dev,_build,session.json"
 
 [tool.ruff]
 # 120 matches the width this codebase already writes to. Chosen deliberately

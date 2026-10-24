@@ -22,12 +22,7 @@ WATCHED_CHANNEL = "14/stable"
 JUJU_API_USER = "jaime-observer"
 JUJU_API_PASSWORD = "integration-test-password"
 
-_RBAC_PATH = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "charms"
-    / "k8s"
-    / "jaime-k8s-rbac.yaml"
-)
+_RBAC_PATH = pathlib.Path(__file__).resolve().parents[2] / "charms" / "k8s" / "jaime-k8s-rbac.yaml"
 
 
 def _jaime_unit() -> str:
@@ -47,7 +42,8 @@ def observer_credentials(juju):
     """Create a Juju user with read access to the model under test."""
     juju.cli("add-user", JUJU_API_USER, include_model=False)
     juju.cli(
-        "change-user-password", JUJU_API_USER,
+        "change-user-password",
+        JUJU_API_USER,
         include_model=False,
         stdin=f"{JUJU_API_PASSWORD}\n{JUJU_API_PASSWORD}\n",
     )
@@ -156,9 +152,7 @@ class TestMissingRbac:
             lambda s: jubilant.all_blocked(s, K8S_APP_NAME),
             timeout=10 * 60,
         )
-        message = deployed_k8s.status().get_units(K8S_APP_NAME)[
-            _jaime_unit()
-        ].workload_status.message
+        message = deployed_k8s.status().get_units(K8S_APP_NAME)[_jaime_unit()].workload_status.message
         assert "RBAC" in message
 
     def test_restoring_rbac_recovers(self, deployed_k8s):

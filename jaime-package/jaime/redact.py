@@ -24,13 +24,15 @@ REDACTED = "[REDACTED]"
 # lowercase, camelCase and separators split into tokens, plus the
 # separators-removed form. That way `password`, `api-token`, `apiToken` and
 # `api_token` match while `monkey`, `keyboard` and `author` do not.
-_SENSITIVE_TOKENS = frozenset({
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "credential",
-})
+_SENSITIVE_TOKENS = frozenset(
+    {
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "credential",
+    }
+)
 _SENSITIVE_JOINED = (
     "apikey",
     "privatekey",
@@ -50,9 +52,7 @@ _PATTERNS = (
     # Bearer token
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     # PEM private key block
-    re.compile(
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
-    ),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
     # JWT: three dot-separated base64url segments
     re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b"),
     # AWS access key id
@@ -61,9 +61,7 @@ _PATTERNS = (
 
 # `key: value` or `key=value` where the key is sensitive; only the value is
 # replaced, so the log line stays readable.
-_SENSITIVE_KEY = (
-    r"(?:password|passwd|pass|secret|token|api[-_]?key|authorization|credential)"
-)
+_SENSITIVE_KEY = r"(?:password|passwd|pass|secret|token|api[-_]?key|authorization|credential)"
 _ASSIGNMENT = re.compile(r"(?i)(\b" + _SENSITIVE_KEY + r"\b\s*[:=]\s*)(\S+)")
 
 
@@ -85,11 +83,7 @@ def is_secret_uri(value) -> bool:
 
 def is_secret_option(name, value=None, option_type=None) -> bool:
     """Whether a config option's value must never be rendered."""
-    return (
-        is_sensitive_name(name)
-        or option_type == "secret"
-        or is_secret_uri(value)
-    )
+    return is_sensitive_name(name) or option_type == "secret" or is_secret_uri(value)
 
 
 def _stringify(value) -> str:

@@ -75,7 +75,10 @@ The concrete layout below is *implementation and build detail*, not architecture
 
 ```text
 jaime-package/jaime/        shared code
-  core.py                   CoreMixin — modes, providers, secrets, actions, incident lifecycle
+  core.py                   CoreMixin - providers, secrets, AI pipeline, incident lifecycle
+  actions.py                ActionsMixin - the Juju action handlers (mixed into CoreMixin)
+  modes.py                  Mode and Provider names
+  check_cache.py            short-lived cache of successful provider checks
   incident.py               Incident, Suggestion, UsageMetadata
   principal.py              StatusTracker — persisted per-unit observations
   report.py                 Markdown report generation
@@ -84,7 +87,7 @@ jaime-package/jaime/        shared code
   controller.py             Juju controller API client (used by the k8s charm)
   logging.py, logutils.py   JSONL audit log, log filtering/de-duplication
   redact.py                 secret redaction for report values and free text
-  providers/                base, gemini, openrouter
+  providers/                base (shared HTTP + OpenAI-chat plumbing), gemini, openrouter, remote
 
 charms/machine/src/
   charm.py                  machine-specific charm
@@ -239,7 +242,7 @@ Header: incident id, unit, charm (name/channel/revision/origin/base/version), st
 ## Failed snap changes          filtered to the failing snap
 ## Snap logs: <snap>.<app>      failed services only, latest error +/- 10 lines
 ## Journal (errors/warnings)    journalctl for relevant units, incident window, compact timeline (machine)
-## Charm config                 the principal's declared options
+## Charm config                 every option of the monitored charm with its value, changed ones flagged
 ## Available actions            the principal charm's declared actions (machine)
 ## Charm links                  docs/source/issue URLs from metadata.yaml (machine)
 ## Disk usage
@@ -249,7 +252,6 @@ Header: incident id, unit, charm (name/channel/revision/origin/base/version), st
 ## Previous container logs      only for containers that have restarted
 ## Kubernetes events
 ## Resource usage (metrics-server)
-## Juju application config
 -- both substrates --
 ## Recent unit logs             compact timeline: error/warning lines with counts, full-date stamps
 ```
@@ -262,6 +264,16 @@ the Juju controller `FullStatus` application fields (`charm-name`,
 is substrate-dependent: the k8s charm always reads them, while the machine
 charm only can when `juju-api-user`/`juju-api-password` are configured; when
 the data is unavailable the header falls back to the unit line alone.
+
+`## Charm config` is one section for both substrates. It lists every option of
+the monitored charm as `name: value`, flags those whose value differs from the
+default with `# changed from default (<default>)` and lists them first, so they
+survive the 100-option cap. Values come from the controller's `Application.Get`
+(k8s always; machine when `juju-api-user`/`juju-api-password` are set); the
+machine charm also reads the declared options from the principal's
+`config.yaml`. Without controller credentials only the declared defaults are
+known, and the section says current values are unavailable instead of implying
+they are the live ones. The executive summary repeats only the changed options.
 
 Two rules matter beyond ordering. Environment variables are reported as
 set/unset only, because the collector reads Jaime's own hook environment rather
@@ -404,8 +416,8 @@ single suggested remediation command, retrievable with the `get-suggestion`
 action. No commands are executed. AI output is purely advisory.
 
 The suggestion is attached to the incident and cached. It is regenerated only
-when the operator supplies different `additional-context` or when the
-configured model changes.
+when the operator supplies different `additional-context`, when the
+configured model changes, or when `get-suggestion` is run with `force=true`.
 
 ### act
 
@@ -631,9 +643,16 @@ AI is not used for:
 `providers/base.py` defines the provider contract; `gemini.py` and
 `openrouter.py` implement it against their REST APIs, and `remote.py` does the
 same for any server that speaks the OpenAI Chat Completions protocol (Ollama,
-llama.cpp, vLLM, LiteLLM), all using the stdlib only. Provider connectivity is
-verified with `check()` on `config-changed` and again before generation, so a
-bad token surfaces as a blocked status rather than a failed incident.
+llama.cpp, vLLM, LiteLLM), all using the stdlib only. `base.py` holds the HTTP
+transport and the OpenAI Chat Completions request/response handling that
+`openrouter.py` and `remote.py` share. Provider connectivity is verified with
+`check()` on `config-changed` and again before generation, so a bad token
+surfaces as a blocked status rather than a failed incident. A successful check
+is remembered on disk for five minutes (keyed by a hash of provider, model, URL
+and token), so a chat bot calling `ask` repeatedly does not pay a check round
+trip per question. The `remote` provider waits up to ten minutes for an answer,
+because a local model can be slow on modest hardware; the hosted providers wait
+60 seconds.
 
 `remote` is the local/self-hosted path. Unlike `gemini` and `openrouter` it
 does not target a fixed public endpoint: `provider-remote-url` must be set to
@@ -660,11 +679,54 @@ logs, reports, or prompts.
 
 ### Usage accounting
 
-Every LLM call records `UsageMetadata` — model, prompt/completion/total tokens,
+Every LLM call records `UsageMetadata` - model, prompt/completion/total tokens,
 and cost when the provider reports it. Entries are appended to a per-unit
 `usage_log` in the state file, preserved across incident episodes, and never
 cleared by a new episode. The `show-usage` action aggregates them into a global
 summary with a per-model breakdown, or filters to a single incident.
+
+### Conversational suggestions
+
+Today an incident holds one `Suggestion`, and regeneration replaces it. The
+conversational mode makes the diagnosis a dialogue: the operator (or an
+external chat bot) asks questions against a stable `incident_id` and gets one
+answer per turn, all retained.
+
+- **State.** An incident carries a bounded append-only list of turns, not one
+  suggestion. Each turn records an `id` (a per-incident integer incremented
+  by one per turn, never reused after pruning), the `question`, the `answer`, parsed
+  `commands`, `generated_at`, the `context_hash` (bound to the turn's inputs)
+  and `usage`. The list is capped at a fixed 20 turns per
+  incident (a constant in the code, not a config option); the oldest turns are
+  pruned at the cap. Existing incidents without
+  a list read as empty. `get-suggestion` keeps its one-shot contract and returns
+  the latest turn.
+- **Actions.** `ask` (both charms) takes `incident-id`
+  (optional; defaults to the current open incident) and `question` (required),
+  appends a turn and never overwrites, and returns the turn id, incident id,
+  answer, commands and usage. `list-suggestions` returns the conversation for
+  an incident. Turn answers are produced only in `suggest` mode; `observe`
+  rejects. Nothing is executed: `act` stays gated, so turns are advisory text.
+- **Multi-turn context.** `ask` has its own prompt, not the one-shot remediation
+  prompt: the stored report, a compact history of the most recent turns
+  (answers truncated, suggested commands kept), then the operator's question,
+  so the model answers the question instead of forcing a fix command. A
+  provider error fails the action with the reason and never blocks the unit.
+  The question is redacted like the report before it is sent or stored. Each turn's prompt projection and usage are recorded
+  in the audit log (`suggestion-generated` with the turn id), so the
+  conversation is reproducible.
+
+Delivery is handled by external chat bots (knowbot, Mattermost, Harvest): a bot
+maps a channel thread to an `incident_id` and calls the `ask` action once per
+user turn, reading the answer from the action result. No long-lived daemon or
+open port is needed.
+
+Design decisions: conversational turns are append-only so the history is
+auditable; bounding turns limits both state size and prompt cost. Rejected:
+keeping a single mutable suggestion (loses the thread); an unbounded turn
+list; an in-charm HTTP listener (a daemon and an open port for no benefit when
+a juju-capable bot can run the `ask` action); a chat UI rendered by Jaime
+itself (the bots render).
 
 ## Data flow
 
@@ -714,6 +776,13 @@ Suggestion (description + remediation command) + UsageMetadata
         ↓
 Attached to the incident, returned by get-suggestion
 ```
+
+The prompt states its rules before the report and repeats the response format
+(one `bash` fenced command, only listed actions) after it. A long report can
+exceed a small local model's context window, which drops the start of the
+prompt; the closing reminder keeps the format rules in view. Commands are parsed
+only from `bash`-tagged fences, deliberately: a model that ignored the format
+yields no command, never a guessed one.
 
 AI output is never the only record. The non-AI Markdown report containing the
 collected evidence is persisted before the provider is called, and the

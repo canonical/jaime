@@ -166,10 +166,7 @@ class TestIncidentLifecycle:
         # its next update-status after seeing the principal leave a watched
         # status.
         deployed.wait(
-            lambda s: (
-                principal_status(s) == "active"
-                and "incident open" not in jaime_message(s, unit)
-            ),
+            lambda s: principal_status(s) == "active" and "incident open" not in jaime_message(s, unit),
             timeout=15 * 60,
         )
         task = deployed.run(unit, "show-status")

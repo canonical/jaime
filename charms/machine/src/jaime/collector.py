@@ -32,8 +32,8 @@ _CAP_FIREWALL = 100
 _CAP_SYSTEMD_FAILED = 50
 _CAP_SYSTEMD_DETAIL = 50
 _CAP_SS = 200
-_CAP_SNAP_SERVICES = 3      # failed services whose logs are fetched
-_CAP_SNAP_LINES = 100       # lines per failed service
+_CAP_SNAP_SERVICES = 3  # failed services whose logs are fetched
+_CAP_SNAP_LINES = 100  # lines per failed service
 _CAP_SNAP_CHANGES = 20
 _CAP_DISK = 100
 _CAP_MEMORY = 50
@@ -56,10 +56,13 @@ _PLAN_ITEM_CAPS = {
 def _run(cmd: list[str], timeout: int = 10) -> str:
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         return result.stdout
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         logger.debug("collection command %s failed: %s", cmd, e)
         return ""
 
@@ -89,7 +92,7 @@ def collect_tracing_events(
 
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-    except Exception as e:
+    except sqlite3.Error as e:
         logger.debug("tracing DB not accessible for %s: %s", unit_name, e)
         return []
 
@@ -98,14 +101,12 @@ def collect_tracing_events(
 
     events = []
     try:
-        rows = conn.execute(
-            "SELECT data FROM tracing ORDER BY id DESC LIMIT 500"
-        ).fetchall()
+        rows = conn.execute("SELECT data FROM tracing ORDER BY id DESC LIMIT 500").fetchall()
 
         for (data,) in rows:
             try:
                 payload = json.loads(data)
-            except Exception:
+            except (ValueError, TypeError):
                 continue
 
             for rs in payload.get("resourceSpans", []):
@@ -115,9 +116,7 @@ def collect_tracing_events(
                             continue
 
                         ts_ns = int(span.get("startTimeUnixNano", 0))
-                        ts = datetime.datetime.fromtimestamp(
-                            ts_ns / 1e9, tz=datetime.timezone.utc
-                        )
+                        ts = datetime.datetime.fromtimestamp(ts_ns / 1e9, tz=datetime.timezone.utc)
 
                         if from_time and ts < from_time:
                             continue
@@ -125,34 +124,33 @@ def collect_tracing_events(
                         for evt in span.get("events", []):
                             evt_name = evt.get("name", "")
                             if evt_name in (
-                                "PreCommitEvent", "CommitEvent",
-                                "CollectAppStatusEvent", "CollectUnitStatusEvent",
+                                "PreCommitEvent",
+                                "CommitEvent",
+                                "CollectAppStatusEvent",
+                                "CollectUnitStatusEvent",
                                 "UpdateStatusEvent",
                             ):
                                 continue
 
-                            attrs = {
-                                a["key"]: list(a["value"].values())[0]
-                                for a in evt.get("attributes", [])
-                            }
+                            attrs = {a["key"]: list(a["value"].values())[0] for a in evt.get("attributes", [])}
 
                             if evt_name == "exception":
                                 # Attach exception to the previous event if any
                                 if events:
-                                    events[-1]["exception_type"] = attrs.get(
-                                        "exception.type", ""
-                                    )
+                                    events[-1]["exception_type"] = attrs.get("exception.type", "")
                                     msg = attrs.get("exception.message", "")
                                     events[-1]["exception_message"] = msg.splitlines()[0] if msg else ""
                                 continue
 
-                            events.append({
-                                "timestamp": ts.isoformat(),
-                                "event": evt_name,
-                                "kind": attrs.get("kind", ""),
-                                "exception_type": "",
-                                "exception_message": "",
-                            })
+                            events.append(
+                                {
+                                    "timestamp": ts.isoformat(),
+                                    "event": evt_name,
+                                    "kind": attrs.get("kind", ""),
+                                    "exception_type": "",
+                                    "exception_message": "",
+                                }
+                            )
 
         conn.close()
     except Exception as e:
@@ -197,7 +195,7 @@ def collect_unit_logs(
     except FileNotFoundError:
         logger.debug("log file not found: %s", log_path)
         return []
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug("could not read %s: %s", log_path, e)
         return []
 
@@ -213,9 +211,7 @@ def collect_unit_logs(
     for line in raw_lines:
         try:
             ts_str = line[:19]
-            ts = datetime.datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=datetime.timezone.utc
-            )
+            ts = datetime.datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc)
             if ts >= cutoff:
                 recent.append(line.rstrip())
         except ValueError:
@@ -224,14 +220,11 @@ def collect_unit_logs(
 
     # Find indices of lines where the log level is ERROR or WARNING
     matched_indices = [
-        i for i, line in enumerate(recent)
-        if re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (ERROR|WARNING)\s", line)
+        i for i, line in enumerate(recent) if re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (ERROR|WARNING)\s", line)
     ]
 
     if not matched_indices:
-        return _cap_lines(
-            _deduplicate_lines(_tail_lines("\n".join(recent), max_lines)), max_lines
-        )
+        return _cap_lines(_deduplicate_lines(_tail_lines("\n".join(recent), max_lines)), max_lines)
 
     # Build set of indices to include: all matched lines + context around last
     include_indices = set(matched_indices)
@@ -282,30 +275,36 @@ def _collect_log_files(plan_log_files: list[dict], max_lines: int) -> list[dict]
             elif len(lines) > remaining:
                 lines = lines[-remaining:]
             remaining -= len(lines)
-            results.append({
-                "path": path,
-                "priority": priority,
-                "description": description,
-                "status": "available",
-                "lines": lines,
-            })
+            results.append(
+                {
+                    "path": path,
+                    "priority": priority,
+                    "description": description,
+                    "status": "available",
+                    "lines": lines,
+                }
+            )
         except FileNotFoundError:
-            results.append({
-                "path": path,
-                "priority": priority,
-                "description": description,
-                "status": "not_found",
-                "lines": [],
-            })
+            results.append(
+                {
+                    "path": path,
+                    "priority": priority,
+                    "description": description,
+                    "status": "not_found",
+                    "lines": [],
+                }
+            )
         except Exception as e:
             logger.debug("could not read log file %s: %s", path, e)
-            results.append({
-                "path": path,
-                "priority": priority,
-                "description": description,
-                "status": "error",
-                "lines": [],
-            })
+            results.append(
+                {
+                    "path": path,
+                    "priority": priority,
+                    "description": description,
+                    "status": "error",
+                    "lines": [],
+                }
+            )
     return results
 
 
@@ -323,26 +322,30 @@ def _collect_processes(plan_processes: list[dict]) -> list[dict]:
             status = "too_many"
         else:
             status = "ok"
-        results.append({
-            "name": name,
-            "expected_min_count": expected_min,
-            "expected_max_count": expected_max,
-            "running_count": count,
-            "status": status,
-        })
+        results.append(
+            {
+                "name": name,
+                "expected_min_count": expected_min,
+                "expected_max_count": expected_max,
+                "running_count": count,
+                "status": status,
+            }
+        )
     return results
 
 
 def _systemd_detail(unit: str) -> dict:
     """Compact, high-signal service state: restart count and exit status."""
-    output = _run([
-        "systemctl", "show",
-        "-p", "ActiveState,SubState,NRestarts,ExecMainStatus",
-        unit,
-    ])
-    data = dict(
-        line.split("=", 1) for line in output.splitlines() if "=" in line
+    output = _run(
+        [
+            "systemctl",
+            "show",
+            "-p",
+            "ActiveState,SubState,NRestarts,ExecMainStatus",
+            unit,
+        ]
     )
+    data = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
     return {
         "unit": unit,
         "status": data.get("ActiveState", "unknown") or "unknown",
@@ -368,11 +371,13 @@ def _collect_network_ports(plan_ports: list[dict], ss_output: str) -> list[dict]
         # Match the port anchored to a colon and followed by a non-digit to
         # avoid false positives (e.g. port 80 matching 8080 or 8000).
         listening = bool(re.search(rf":{port}(?!\d)", ss_output)) if port else False
-        results.append({
-            "port": port,
-            "protocol": protocol,
-            "status": "listening" if listening else "not_listening",
-        })
+        results.append(
+            {
+                "port": port,
+                "protocol": protocol,
+                "status": "listening" if listening else "not_listening",
+            }
+        )
     return results
 
 
@@ -384,15 +389,16 @@ def _collect_env_variables(plan_vars: list[str]) -> list[dict]:
     """
     results = []
     for var in plan_vars:
-        results.append({
-            "name": var,
-            "status": "set" if var in os.environ else "unset",
-        })
+        results.append(
+            {
+                "name": var,
+                "status": "set" if var in os.environ else "unset",
+            }
+        )
     return results
 
 
-def _collect_health_commands(plan_health_commands: list[dict],
-                             max_lines: int = _CAP_HEALTH_OUTPUT) -> list[dict]:
+def _collect_health_commands(plan_health_commands: list[dict], max_lines: int = _CAP_HEALTH_OUTPUT) -> list[dict]:
     results = []
     for cmd_def in plan_health_commands:
         command = cmd_def.get("command", "")
@@ -400,32 +406,41 @@ def _collect_health_commands(plan_health_commands: list[dict],
         argv = shlex.split(command)
         try:
             result = subprocess.run(
-                argv, capture_output=True, text=True, timeout=timeout,
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
-            results.append({
-                "command": command,
-                "timeout_seconds": timeout,
-                "returncode": result.returncode,
-                "stdout": "\n".join(_cap_lines(result.stdout.splitlines(), max_lines)),
-                "stderr": "\n".join(_cap_lines(result.stderr.splitlines(), max_lines)),
-            })
+            results.append(
+                {
+                    "command": command,
+                    "timeout_seconds": timeout,
+                    "returncode": result.returncode,
+                    "stdout": "\n".join(_cap_lines(result.stdout.splitlines(), max_lines)),
+                    "stderr": "\n".join(_cap_lines(result.stderr.splitlines(), max_lines)),
+                }
+            )
         except subprocess.TimeoutExpired:
-            results.append({
-                "command": command,
-                "timeout_seconds": timeout,
-                "returncode": -1,
-                "stdout": "",
-                "stderr": "timed out after {}s".format(timeout),
-            })
+            results.append(
+                {
+                    "command": command,
+                    "timeout_seconds": timeout,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": "timed out after {}s".format(timeout),
+                }
+            )
         except Exception as e:
             logger.debug("health command %s failed: %s", command, e)
-            results.append({
-                "command": command,
-                "timeout_seconds": timeout,
-                "returncode": -1,
-                "stdout": "",
-                "stderr": str(e),
-            })
+            results.append(
+                {
+                    "command": command,
+                    "timeout_seconds": timeout,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(e),
+                }
+            )
     return results
 
 
@@ -506,9 +521,7 @@ def collect_charm_config(unit_name: str, max_bytes: int = _CAP_CHARM_CONFIG_BYTE
             with open(path) as f:
                 raw = f.read()
             if len(raw.encode("utf-8", errors="replace")) > max_bytes:
-                logger.warning(
-                    "charm file %s for %s exceeds %d bytes; skipped", path, unit_name, max_bytes
-                )
+                logger.warning("charm file %s for %s exceeds %d bytes; skipped", path, unit_name, max_bytes)
                 result[name.replace(".yaml", "_yaml")] = ""
             else:
                 result[name.replace(".yaml", "_yaml")] = raw
@@ -530,6 +543,7 @@ def collect_charm_config(unit_name: str, max_bytes: int = _CAP_CHARM_CONFIG_BYTE
 # the cause. The whole snap context is omitted when nothing has failed, and on
 # hosts without snapd.
 
+
 def _snap_services(output: str) -> list[dict]:
     """Parse the `snap services` table into service/startup/current records."""
     services = []
@@ -540,12 +554,14 @@ def _snap_services(output: str) -> list[dict]:
         service, startup, current = parts[0], parts[1], parts[2]
         if "." not in service:
             continue
-        services.append({
-            "service": service,
-            "snap": service.split(".", 1)[0],
-            "startup": startup,
-            "current": current,
-        })
+        services.append(
+            {
+                "service": service,
+                "snap": service.split(".", 1)[0],
+                "startup": startup,
+                "current": current,
+            }
+        )
     return services
 
 
@@ -572,10 +588,7 @@ def _error_window(lines: list[str], context_window: int, max_lines: int) -> list
     case-insensitive text search, as elsewhere. Falls back to the tail when
     nothing matches.
     """
-    matches = [
-        i for i, line in enumerate(lines)
-        if re.search(r"error|warning", line, re.IGNORECASE)
-    ]
+    matches = [i for i, line in enumerate(lines) if re.search(r"error|warning", line, re.IGNORECASE)]
     if not matches:
         return _cap_lines(lines, max_lines)
     last = matches[-1]
@@ -612,17 +625,13 @@ def collect_snap_context(max_lines: int = _DEFAULT_MAX_LINES) -> dict:
             timeout=15,
         )
         if output:
-            logs[svc["service"]] = _error_window(
-                output.splitlines(), 10, min(max_lines, _CAP_SNAP_LINES)
-            )
+            logs[svc["service"]] = _error_window(output.splitlines(), 10, min(max_lines, _CAP_SNAP_LINES))
 
     return {
         "packages": _cap_lines(packages_out.splitlines(), max_lines),
         "services": _cap_lines(services_out.splitlines(), max_lines),
         "failed_services": [svc["service"] for svc in failed],
-        "failed_changes": _cap_lines(
-            _failed_snap_changes(changes_out, failed_snaps), _CAP_SNAP_CHANGES
-        ),
+        "failed_changes": _cap_lines(_failed_snap_changes(changes_out, failed_snaps), _CAP_SNAP_CHANGES),
         "logs": logs,
     }
 
@@ -654,8 +663,7 @@ def _systemd_unit_name(unit: str) -> str:
     return unit
 
 
-def _journal_units(diagnostics_plan: dict | None,
-                   systemd_failed: list[str]) -> list[str]:
+def _journal_units(diagnostics_plan: dict | None, systemd_failed: list[str]) -> list[str]:
     """Relevant systemd units for journalctl, bounded.
 
     Union of: plan-listed ``systemd_units``, failed systemd units, and the
@@ -665,7 +673,7 @@ def _journal_units(diagnostics_plan: dict | None,
     """
     units: list[str] = []
     mp = (diagnostics_plan or {}).get("monitoring_plan", {})
-    for unit in mp.get("systemd_units", [])[:_PLAN_ITEM_CAPS["systemd_units"]]:
+    for unit in mp.get("systemd_units", [])[: _PLAN_ITEM_CAPS["systemd_units"]]:
         if isinstance(unit, str):
             units.append(_systemd_unit_name(unit))
     for unit in systemd_failed[:_CAP_JOURNAL_UNITS]:
@@ -708,9 +716,14 @@ def collect_journal_errors(
         cutoff = earliest_allowed
 
     cmd = [
-        "journalctl", "--no-pager", "-o", "short-iso",
-        "--since", cutoff.strftime("%Y-%m-%d %H:%M:%S"),
-        "-p", "warning",
+        "journalctl",
+        "--no-pager",
+        "-o",
+        "short-iso",
+        "--since",
+        cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+        "-p",
+        "warning",
     ]
     for unit in units:
         cmd += ["--unit", unit]
@@ -728,7 +741,7 @@ def collect_journal_errors(
 
 def _capped(section: list, name: str) -> list:
     """Apply the plan item-count cap for a monitoring-plan section."""
-    return section[:_PLAN_ITEM_CAPS.get(name, len(section))]
+    return section[: _PLAN_ITEM_CAPS.get(name, len(section))]
 
 
 def collect_context(
@@ -762,11 +775,16 @@ def collect_context(
 
     context = {
         "unit_logs": collect_unit_logs(
-            unit_name, log_window_minutes, max_lines,
-            from_time=from_time, buffer_minutes=buffer_minutes,
+            unit_name,
+            log_window_minutes,
+            max_lines,
+            from_time=from_time,
+            buffer_minutes=buffer_minutes,
         ),
         "tracing_events": collect_tracing_events(
-            unit_name, from_time=from_time, buffer_minutes=buffer_minutes,
+            unit_name,
+            from_time=from_time,
+            buffer_minutes=buffer_minutes,
         ),
         "charm_config": collect_charm_config(unit_name),
         "disk_usage": collect_disk_usage(_CAP_DISK),
@@ -778,7 +796,8 @@ def collect_context(
         "snap": collect_snap_context(max_lines),
         "snap_list": collect_snap_list(max_lines),
         "journal": collect_journal_errors(
-            max_lines, from_time=from_time,
+            max_lines,
+            from_time=from_time,
             log_window_minutes=log_window_minutes,
             buffer_minutes=buffer_minutes,
             units=_journal_units(diagnostics_plan, systemd_failed),
@@ -832,8 +851,7 @@ def collect_context(
             }
 
         network = mp.get("network", {})
-        ports = _capped(network.get("ports", []) if isinstance(network, dict) else [],
-                        "network_ports")
+        ports = _capped(network.get("ports", []) if isinstance(network, dict) else [], "network_ports")
         if ports:
             plan_results["network_ports"] = {
                 "type": "plan",

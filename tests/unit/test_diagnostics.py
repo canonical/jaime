@@ -20,12 +20,8 @@ class TestValidateDiagnostics:
         plan = {
             "principal_name": "test-app",
             "monitoring_plan": {
-                "log_files": [
-                    {"path": "/var/log/test.log", "priority": "high", "description": "test log"}
-                ],
-                "processes": [
-                    {"name": "testd", "expected_min_count": 1, "expected_max_count": 2}
-                ],
+                "log_files": [{"path": "/var/log/test.log", "priority": "high", "description": "test log"}],
+                "processes": [{"name": "testd", "expected_min_count": 1, "expected_max_count": 2}],
                 "env_variables": ["TEST_VAR"],
                 "network": {"ports": [{"port": 8080, "protocol": "tcp"}]},
                 "systemd_units": ["testd.service"],
@@ -85,9 +81,7 @@ class TestValidateDiagnostics:
         plan = {
             "principal_name": "test-app",
             "monitoring_plan": {
-                "log_files": [
-                    {"path": "/var/log/test.log", "priority": "urgent", "description": "test"}
-                ],
+                "log_files": [{"path": "/var/log/test.log", "priority": "urgent", "description": "test"}],
                 "processes": [],
                 "env_variables": [],
                 "network": {"ports": []},
@@ -381,10 +375,7 @@ class TestValidateK8sDiagnostics:
         assert any("unknown keys" in e and "container" in e for e in errors)
 
     def test_string_list_wrong_type(self):
-        assert any(
-            "must be a list" in e
-            for e in validate_k8s_diagnostics({"app": {"containers": "nope"}})
-        )
+        assert any("must be a list" in e for e in validate_k8s_diagnostics({"app": {"containers": "nope"}}))
 
     def test_string_list_items_must_be_non_empty_strings(self):
         errors = validate_k8s_diagnostics({"app": {"env_variables": ["OK", "", 7]}})
@@ -406,9 +397,7 @@ class TestValidateK8sDiagnostics:
         assert any("not a valid regex" in e for e in errors)
 
     def test_log_pattern_too_long(self):
-        errors = validate_k8s_diagnostics(
-            {"app": {"log_patterns": ["x" * (K8S_MAX_LOG_PATTERN_CHARS + 1)]}}
-        )
+        errors = validate_k8s_diagnostics({"app": {"log_patterns": ["x" * (K8S_MAX_LOG_PATTERN_CHARS + 1)]}})
         assert any("exceeds" in e for e in errors)
 
     def test_port_must_be_an_integer(self):
@@ -416,7 +405,5 @@ class TestValidateK8sDiagnostics:
         assert any("port' must be an integer" in e for e in errors)
 
     def test_port_protocol_is_restricted(self):
-        errors = validate_k8s_diagnostics(
-            {"app": {"ports": [{"port": 5432, "protocol": "sctp"}]}}
-        )
+        errors = validate_k8s_diagnostics({"app": {"ports": [{"port": 5432, "protocol": "sctp"}]}})
         assert any("protocol' must be 'tcp' or 'udp'" in e for e in errors)

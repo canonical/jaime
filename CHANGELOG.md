@@ -4,14 +4,28 @@
 
 ### Features
 
-- Add a `remote` provider for any server that speaks the OpenAI Chat Completions protocol (Ollama, llama.cpp, vLLM, LiteLLM). `provider-remote-url` points at the server's `/v1` root and is required with `provider=remote`; `api-token` is optional, with no `Authorization` header sent when it is empty; `remote` has no provider-default model. Setting `provider-remote-url` with `gemini` or `openrouter` blocks the unit
+- Add a `remote` provider for any server that speaks the OpenAI Chat Completions protocol (Ollama, llama.cpp, vLLM, LiteLLM). `provider-remote-url` points at the server's `/v1` root and is required with `provider=remote`; `api-token` is optional, with no `Authorization` header sent when it is empty; `remote` has no provider-default model. Setting `provider-remote-url` with `gemini` or `openrouter` blocks the unit. Answers are awaited for up to ten minutes, so slow local models do not time out
 - Add the monitored application's charm details to the incident report header - charm name, channel (track/risk), revision, origin, base and workload version - read from the Juju controller `FullStatus`. The k8s charm always includes them; the machine charm does when controller credentials are configured, and omits them otherwise
 - Add an always-on snap inventory (`snap list`) and a bounded journalctl sample - errors/warnings only, for the relevant units (plan-listed, failed, and snap service units), limited to the incident time window - to machine incident reports
 - Render machine report logs as a compact timeline - full `YYYY-MM-DD HH:MM:SS` stamps, consecutive identical messages collapsed to a `×N` count - for `## Recent unit logs` and `## Journal`, and digest the broad network-port fallback to `local-address:port owner`
+- Add a conversational mode: `ask` adds a question/answer turn to an incident without overwriting earlier ones, and `list-suggestions` prints the conversation (the last 20 turns are kept per incident). `ask` can target a closed incident, and needs `incident-id` when several incidents are open
+- Add a `force` parameter to `get-suggestion` to regenerate the suggestion instead of reusing the stored one
+
+### Improvements
+
+- Report lists no longer put a blank line after every bullet
+- `## Charm config` in the report now lists every option of the monitored charm with its value and flags those changed from the default. It replaces `## Juju application config`. On the machine charm, values need `juju-api-user`/`juju-api-password`; without them the declared defaults are shown
+- The suggestion prompt repeats its response-format rules after the report, so small local models that truncate long prompts still answer in the expected format
+- Internal refactoring: the shared code is split into smaller modules, the providers share one HTTP implementation, broad exception handlers are narrowed, and the code base is formatted with `ruff format`
+
+### Removals
+
+- Remove the machine charm `diagnose` action; `show-status` and `generate-report` cover the same information
 
 ### Bug fixes
 
-- Fix the missing `## Charm config` section in machine reports: the collector tailed `config.yaml` to the last 200 lines, which for a large file severed the top-level `options:` mapping and silently dropped the section. Charm YAML files are now read in full, guarded by a byte cap applied at the call site, and an unparseable-but-present `config.yaml` renders a visible note instead of vanishing
+- A charm whose `config.yaml` declares a non-mapping option no longer aborts report generation; such options are skipped
+- Fix the missing `## Charm config` section in machine reports: the collector tailed `config.yaml` to the last 200 lines, which for a large file severed the top-level `options:` mapping and silently dropped the section. Charm YAML files are now read in full, guarded by a byte cap applied at the call site, and an unparsable-but-present `config.yaml` renders a visible note instead of vanishing
 
 ## [0.1.1] - 2026-10-12
 

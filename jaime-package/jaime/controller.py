@@ -58,10 +58,7 @@ def parse_agent_conf(path: str) -> dict:
     m = re.search(r"cacert: \|\n((?:.*\n)*?)(?=\S)", content)
     if not m:
         raise ControllerError("cacert not found in agent.conf")
-    ca_cert = "\n".join(
-        line[2:] if line.startswith("  ") else line
-        for line in m.group(1).splitlines()
-    ).strip() + "\n"
+    ca_cert = "\n".join(line[2:] if line.startswith("  ") else line for line in m.group(1).splitlines()).strip() + "\n"
 
     addr = re.search(r"apiaddresses:\n- (.*)", content)
     if not addr:
@@ -81,8 +78,7 @@ def parse_agent_conf(path: str) -> dict:
 class JujuControllerClient:
     """WebSocket client for the Juju controller API."""
 
-    def __init__(self, api_address: str, ca_cert: str, model_uuid: str,
-                 timeout: int = 30):
+    def __init__(self, api_address: str, ca_cert: str, model_uuid: str, timeout: int = 30):
         self._url = f"wss://{api_address}/model/{model_uuid}/api"
         self._ca_cert = ca_cert
         self._timeout = timeout
@@ -112,22 +108,24 @@ class JujuControllerClient:
         except Exception as e:
             raise ControllerError(f"could not connect to {self._url}: {e}") from e
 
-    def _call(self, facade: str, method: str, version: int,
-              params: dict | None = None) -> dict:
+    def _call(self, facade: str, method: str, version: int, params: dict | None = None) -> dict:
         """Send one JSON-RPC request and return the response payload."""
         self._request_id += 1
-        self._ws.send(json.dumps({
-            "type": facade,
-            "request": method,
-            "version": version,
-            "params": params or {},
-            "request-id": self._request_id,
-        }))
+        self._ws.send(
+            json.dumps(
+                {
+                    "type": facade,
+                    "request": method,
+                    "version": version,
+                    "params": params or {},
+                    "request-id": self._request_id,
+                }
+            )
+        )
         response = json.loads(self._ws.recv())
         if response.get("error"):
             raise ControllerError(
-                f"{facade}.{method}: {response['error']} "
-                f"(code: {response.get('error-code', 'unknown')})"
+                f"{facade}.{method}: {response['error']} (code: {response.get('error-code', 'unknown')})"
             )
         return response.get("response", {})
 
@@ -136,10 +134,15 @@ class JujuControllerClient:
         if not username.startswith("user-"):
             username = f"user-{username}"
         try:
-            response = self._call("Admin", "Login", 3, {
-                "auth-tag": username,
-                "credentials": password,
-            })
+            response = self._call(
+                "Admin",
+                "Login",
+                3,
+                {
+                    "auth-tag": username,
+                    "credentials": password,
+                },
+            )
         except ControllerError as e:
             raise ControllerAuthError(str(e)) from e
         for entry in response.get("facades", []):
@@ -166,8 +169,7 @@ class JujuControllerClient:
         ``source == "user"`` marks options the operator explicitly changed.
         """
         version = self.facade_version("Application", 15)
-        return self._call("Application", "Get", version,
-                          {"application": application})
+        return self._call("Application", "Get", version, {"application": application})
 
     def close(self) -> None:
         if self._ws:
@@ -184,10 +186,11 @@ class JujuControllerClient:
             self._ca_path = None
 
 
-def extract_unit_statuses(full_status: dict,
-                          watch_applications: list[str] | None = None,
-                          exclude_applications: list[str] | None = None,
-                          ) -> dict[str, dict]:
+def extract_unit_statuses(
+    full_status: dict,
+    watch_applications: list[str] | None = None,
+    exclude_applications: list[str] | None = None,
+) -> dict[str, dict]:
     """Extract per-unit workload statuses from a FullStatus response.
 
     Returns {unit_name: {"status": str, "since": str, "message": str,
