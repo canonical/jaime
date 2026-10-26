@@ -8,7 +8,10 @@ dedicated user created for it.
 Once granted, the observer also lets Jaime capture a workload's **status
 message** - the "reason" Juju reports for an unhealthy unit, for example
 `Please initialize OpenBao or integrate with an auto-unseal provider` - and
-include it at the top of every incident report.
+include it at the top of every incident report. The same access lets the
+machine charm read the current values of the monitored charm's config options,
+so `## Charm config` shows what is set and flags what differs from the default;
+without it the section shows only the declared defaults.
 
 ## Create the observer user
 

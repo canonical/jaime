@@ -34,8 +34,10 @@ class TestWatchApplications:
     def test_empty_watch_active_when_prereqs_ok(self):
         """With prerequisites verified, empty watch-applications is the opt-out."""
         h = _make_harness({"watch-applications": ""})
-        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
-             mock.patch.object(h.charm, "_fetch_unit_statuses") as mock_fetch:
+        with (
+            mock.patch.object(h.charm, "_prerequisite_error", return_value=None),
+            mock.patch.object(h.charm, "_fetch_unit_statuses") as mock_fetch,
+        ):
             h.charm._monitor()
         mock_fetch.assert_not_called()
         assert isinstance(h.charm.unit.status, ActiveStatus)
@@ -59,13 +61,17 @@ class TestWatchApplications:
         assert "juju-api-user" in h.charm.unit.status.message
 
     def test_with_credentials_and_ok_prereqs_calls_fetch(self):
-        h = _make_harness({
-            "watch-applications": "postgresql-k8s",
-            "juju-api-user": "jaime-observer",
-            "juju-api-password": "secret",
-        })
-        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
-             mock.patch.object(h.charm, "_fetch_unit_statuses", return_value={}):
+        h = _make_harness(
+            {
+                "watch-applications": "postgresql-k8s",
+                "juju-api-user": "jaime-observer",
+                "juju-api-password": "secret",
+            }
+        )
+        with (
+            mock.patch.object(h.charm, "_prerequisite_error", return_value=None),
+            mock.patch.object(h.charm, "_fetch_unit_statuses", return_value={}),
+        ):
             h.charm._monitor()
         # fetch called; empty result -> maintenance status
         assert isinstance(h.charm.unit.status, MaintenanceStatus)
@@ -84,21 +90,17 @@ class TestPrerequisiteCheck:
     def _patch_env(self, client=None, k8s_check=None, login_error=None):
         """Patch agent.conf, the controller client, and the k8s API client."""
         stack = contextlib.ExitStack()
-        stack.enter_context(mock.patch(
-            "charm.agent_conf_path", return_value="/tmp/agent.conf"
-        ))
-        stack.enter_context(mock.patch(
-            "charm.parse_agent_conf",
-            return_value={"api_address": "a", "ca_cert": "c", "model_uuid": "m"},
-        ))
+        stack.enter_context(mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"))
+        stack.enter_context(
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={"api_address": "a", "ca_cert": "c", "model_uuid": "m"},
+            )
+        )
 
         controller = mock.MagicMock()
-        controller.__enter__.return_value = (
-            client or self._controller_client_for({}, login_error=login_error)
-        )
-        stack.enter_context(mock.patch(
-            "charm.JujuControllerClient", return_value=controller
-        ))
+        controller.__enter__.return_value = client or self._controller_client_for({}, login_error=login_error)
+        stack.enter_context(mock.patch("jaime.core.JujuControllerClient", return_value=controller))
         if k8s_check is not None:
             k8s = mock.Mock()
             k8s.check_access.return_value = k8s_check
@@ -106,17 +108,17 @@ class TestPrerequisiteCheck:
         return stack
 
     def _harness_with_creds(self, watch="postgresql-k8s"):
-        return _make_harness({
-            "watch-applications": watch,
-            "juju-api-user": "jaime-observer",
-            "juju-api-password": "secret",
-        })
+        return _make_harness(
+            {
+                "watch-applications": watch,
+                "juju-api-user": "jaime-observer",
+                "juju-api-password": "secret",
+            }
+        )
 
     def test_missing_app_blocks(self):
         h = self._harness_with_creds("postgresql-k8s,mysql-k8s")
-        client = self._controller_client_for(
-            {"postgresql-k8s": {"units": {}}}
-        )
+        client = self._controller_client_for({"postgresql-k8s": {"units": {}}})
         with self._patch_env(client=client, k8s_check=("ok", None)):
             msg = h.charm._prerequisite_error()
         assert "mysql-k8s" in msg
@@ -160,18 +162,18 @@ class TestPrerequisiteCheck:
 
         h = self._harness_with_creds()
         with self._patch_env(k8s_check=None) as stack:
-            stack.enter_context(mock.patch(
-                "charm.JujuControllerClient",
-                side_effect=ControllerError("controller down"),
-            ))
+            stack.enter_context(
+                mock.patch(
+                    "jaime.core.JujuControllerClient",
+                    side_effect=ControllerError("controller down"),
+                )
+            )
             assert h.charm._prerequisite_error() is None
 
     def test_missing_rbac_blocks(self):
         h = self._harness_with_creds()
         client = self._controller_client_for({"postgresql-k8s": {"units": {}}})
-        with self._patch_env(
-            client=client, k8s_check=("forbidden", "cannot read pod logs")
-        ):
+        with self._patch_env(client=client, k8s_check=("forbidden", "cannot read pod logs")):
             msg = h.charm._prerequisite_error()
         assert "Kubernetes RBAC missing" in msg
         assert "cannot read pod logs" in msg
@@ -179,15 +181,14 @@ class TestPrerequisiteCheck:
     def test_unreachable_k8s_does_not_block(self):
         h = self._harness_with_creds()
         client = self._controller_client_for({"postgresql-k8s": {"units": {}}})
-        with self._patch_env(
-            client=client, k8s_check=("unreachable", "cannot reach API")
-        ):
+        with self._patch_env(client=client, k8s_check=("unreachable", "cannot reach API")):
             assert h.charm._prerequisite_error() is None
 
     def test_config_change_blocks_on_prereq(self):
         h = _make_harness({"watch-applications": "ghost-app"})
-        with mock.patch.object(h.charm, "_prerequisite_error",
-                               return_value="watch-applications not found on model: ghost-app"):
+        with mock.patch.object(
+            h.charm, "_prerequisite_error", return_value="watch-applications not found on model: ghost-app"
+        ):
             h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, BlockedStatus)
         assert "ghost-app" in h.charm.unit.status.message
@@ -201,17 +202,17 @@ class TestPrerequisiteCheck:
     def test_config_change_preserves_existing_block(self):
         """An invalid mode must not be overwritten by the prerequisite check."""
         h = _make_harness({"mode": "nonsense"})
-        with mock.patch.object(h.charm, "_prerequisite_error",
-                               return_value="watch-applications: x"):
+        with mock.patch.object(h.charm, "_prerequisite_error", return_value="watch-applications: x"):
             h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, BlockedStatus)
         assert "invalid mode" in h.charm.unit.status.message
 
     def test_monitor_blocks_on_prereq(self):
         h = _make_harness({"watch-applications": "postgresql-k8s"})
-        with mock.patch.object(h.charm, "_prerequisite_error",
-                               return_value="k8s prereq failed"), \
-             mock.patch.object(h.charm, "_fetch_unit_statuses") as mock_fetch:
+        with (
+            mock.patch.object(h.charm, "_prerequisite_error", return_value="k8s prereq failed"),
+            mock.patch.object(h.charm, "_fetch_unit_statuses") as mock_fetch,
+        ):
             h.charm._monitor()
         mock_fetch.assert_not_called()
         assert isinstance(h.charm.unit.status, BlockedStatus)
@@ -302,8 +303,10 @@ class TestMonitoredApplications:
     def test_names_resolved_applications(self):
         h = _make_harness(self._CONFIG)
         statuses = {"postgresql-k8s/0": {"status": "active", "since": "2026-01-01T00:00:00Z"}}
-        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
-             mock.patch.object(h.charm, "_fetch_unit_statuses", return_value=statuses):
+        with (
+            mock.patch.object(h.charm, "_prerequisite_error", return_value=None),
+            mock.patch.object(h.charm, "_fetch_unit_statuses", return_value=statuses),
+        ):
             h.charm._monitor()
         assert h.charm._monitored_applications() == ["postgresql-k8s"]
         assert h.charm.unit.status.message == "Ready: monitoring postgresql-k8s"
@@ -312,15 +315,19 @@ class TestMonitoredApplications:
         """mysql-k8s is configured but has no units, so it is not named."""
         h = _make_harness(self._CONFIG)
         statuses = {"postgresql-k8s/0": {"status": "active", "since": "2026-01-01T00:00:00Z"}}
-        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
-             mock.patch.object(h.charm, "_fetch_unit_statuses", return_value=statuses):
+        with (
+            mock.patch.object(h.charm, "_prerequisite_error", return_value=None),
+            mock.patch.object(h.charm, "_fetch_unit_statuses", return_value=statuses),
+        ):
             h.charm._monitor()
         assert "mysql-k8s" not in h.charm.unit.status.message
 
     def test_no_units_matched_keeps_maintenance(self):
         h = _make_harness(self._CONFIG)
-        with mock.patch.object(h.charm, "_prerequisite_error", return_value=None), \
-             mock.patch.object(h.charm, "_fetch_unit_statuses", return_value={}):
+        with (
+            mock.patch.object(h.charm, "_prerequisite_error", return_value=None),
+            mock.patch.object(h.charm, "_fetch_unit_statuses", return_value={}),
+        ):
             h.charm._monitor()
         assert isinstance(h.charm.unit.status, MaintenanceStatus)
         assert h.charm._monitored_applications() == []
@@ -335,7 +342,8 @@ class TestMonitoredApplications:
     def test_ready_message_format(self):
         h = _make_harness(self._CONFIG)
         h.charm._status_tracker._state = {
-            "postgresql-k8s/0": {}, "mysql-k8s/0": {},
+            "postgresql-k8s/0": {},
+            "mysql-k8s/0": {},
         }
         assert h.charm._ready_message() == "Ready: monitoring mysql-k8s, postgresql-k8s"
 
@@ -353,8 +361,10 @@ class TestDiagnosticsConfig:
 
     def test_invalid_json_blocks_with_event(self):
         h = _make_harness({"diagnostics": "{not json"})
-        with mock.patch("charm.write_event") as mock_event, \
-             mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
+        with (
+            mock.patch("charm.write_event") as mock_event,
+            mock.patch.object(h.charm, "_prerequisite_error", return_value=None),
+        ):
             h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, BlockedStatus)
         assert "invalid diagnostics config" in h.charm.unit.status.message
@@ -362,8 +372,7 @@ class TestDiagnosticsConfig:
 
     def test_invalid_schema_blocks(self):
         h = _make_harness({"diagnostics": '{"app": {"bogus": []}}'})
-        with mock.patch("charm.write_event"), \
-             mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
+        with mock.patch("charm.write_event"), mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
             h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, BlockedStatus)
         assert "unknown keys" in h.charm.unit.status.message
@@ -377,9 +386,7 @@ class TestDiagnosticsConfig:
 
     def test_app_plan_slices_by_application(self):
         h = _make_harness({"diagnostics": self._VALID})
-        assert h.charm._app_diagnostics_plan("postgresql-k8s") == {
-            "containers": ["postgresql"]
-        }
+        assert h.charm._app_diagnostics_plan("postgresql-k8s") == {"containers": ["postgresql"]}
         assert h.charm._app_diagnostics_plan("other") is None
 
     def test_empty_plan_returns_none(self):

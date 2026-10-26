@@ -125,9 +125,7 @@ def _charm_path(glob: str) -> pathlib.Path:
     """Locate a packed charm for the principal's series, failing with a hint."""
     matches = sorted(DIST_DIR.glob(glob))
     if not matches:
-        pytest.fail(
-            f"No charm matching {glob!r} in {DIST_DIR}. Run `make pack-all` first."
-        )
+        pytest.fail(f"No charm matching {glob!r} in {DIST_DIR}. Run `make pack-all` first.")
     return matches[0]
 
 

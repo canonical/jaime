@@ -55,13 +55,15 @@ class TestJujuControllerClient:
     def test_login_sends_correct_envelope(self):
         client = self._make_client()
         client._ws = mock.MagicMock()
-        client._ws.recv.return_value = json.dumps({
-            "request-id": 1,
-            "response": {
-                "facades": [{"name": "Client", "versions": [5, 6]}],
-                "user-info": {"identity": "user-jaime-observer"},
-            },
-        })
+        client._ws.recv.return_value = json.dumps(
+            {
+                "request-id": 1,
+                "response": {
+                    "facades": [{"name": "Client", "versions": [5, 6]}],
+                    "user-info": {"identity": "user-jaime-observer"},
+                },
+            }
+        )
         result = client.login("jaime-observer", "secret")
         sent = json.loads(client._ws.send.call_args[0][0])
         assert result["user-info"]["identity"] == "user-jaime-observer"
@@ -82,9 +84,12 @@ class TestJujuControllerClient:
     def test_login_auth_failure_raises_auth_error(self):
         client = self._make_client()
         client._ws = mock.MagicMock()
-        client._ws.recv.return_value = json.dumps({
-            "request-id": 1, "error": "invalid entity name or password",
-        })
+        client._ws.recv.return_value = json.dumps(
+            {
+                "request-id": 1,
+                "error": "invalid entity name or password",
+            }
+        )
         with pytest.raises(ControllerAuthError):
             client.login("observer", "wrongpw")
 
@@ -92,9 +97,12 @@ class TestJujuControllerClient:
         client = self._make_client()
         client._ws = mock.MagicMock()
         client.facades = {"Client": [5, 6]}
-        client._ws.recv.return_value = json.dumps({
-            "request-id": 1, "response": {"applications": {}},
-        })
+        client._ws.recv.return_value = json.dumps(
+            {
+                "request-id": 1,
+                "response": {"applications": {}},
+            }
+        )
         result = client.full_status()
         sent = json.loads(client._ws.send.call_args[0][0])
         assert sent["type"] == "Client"
@@ -105,9 +113,13 @@ class TestJujuControllerClient:
     def test_error_response_raises_controller_error(self):
         client = self._make_client()
         client._ws = mock.MagicMock()
-        client._ws.recv.return_value = json.dumps({
-            "request-id": 1, "error": "permission denied", "error-code": "forbidden",
-        })
+        client._ws.recv.return_value = json.dumps(
+            {
+                "request-id": 1,
+                "error": "permission denied",
+                "error-code": "forbidden",
+            }
+        )
         with pytest.raises(ControllerError, match="permission denied"):
             client.full_status()
 
@@ -223,15 +235,11 @@ class TestExtractUnitStatuses:
         assert result["postgresql-k8s/0"]["message"] == "Unsatisfied plugin dependencies"
 
     def test_watch_filter(self):
-        result = extract_unit_statuses(
-            _FULL_STATUS, watch_applications=["postgresql-k8s"]
-        )
+        result = extract_unit_statuses(_FULL_STATUS, watch_applications=["postgresql-k8s"])
         assert list(result.keys()) == ["postgresql-k8s/0"]
 
     def test_exclude_filter(self):
-        result = extract_unit_statuses(
-            _FULL_STATUS, exclude_applications=["jaime-k8s"]
-        )
+        result = extract_unit_statuses(_FULL_STATUS, exclude_applications=["jaime-k8s"])
         assert "jaime-k8s/0" not in result
         assert len(result) == 2
 
@@ -259,21 +267,15 @@ class TestExtractMachineUnitStatuses:
 
     def test_subordinate_watched_under_unwatched_principal(self):
         """A watched subordinate is reachable even when its principal is not."""
-        result = extract_unit_statuses(
-            _FULL_STATUS_MACHINE, watch_applications=["logrotated"]
-        )
+        result = extract_unit_statuses(_FULL_STATUS_MACHINE, watch_applications=["logrotated"])
         assert list(result) == ["logrotated/0"]
 
     def test_watch_does_not_leak_subordinates_of_watched_principal(self):
-        result = extract_unit_statuses(
-            _FULL_STATUS_MACHINE, watch_applications=["ubuntu"]
-        )
+        result = extract_unit_statuses(_FULL_STATUS_MACHINE, watch_applications=["ubuntu"])
         assert list(result) == ["ubuntu/0"]
 
     def test_exclude_removes_nested_subordinate(self):
-        result = extract_unit_statuses(
-            _FULL_STATUS_MACHINE, exclude_applications=["logrotated"]
-        )
+        result = extract_unit_statuses(_FULL_STATUS_MACHINE, exclude_applications=["logrotated"])
         assert "logrotated/0" not in result
         assert "jaime/0" in result
 
@@ -284,9 +286,7 @@ class TestExtractMachineUnitStatuses:
         excludes the principal application from the controller set; its
         co-located subordinates must remain visible.
         """
-        result = extract_unit_statuses(
-            _FULL_STATUS_MACHINE, exclude_applications=["ubuntu"]
-        )
+        result = extract_unit_statuses(_FULL_STATUS_MACHINE, exclude_applications=["ubuntu"])
         assert "ubuntu/0" not in result
         assert result["logrotated/0"]["machine"] == "0"
 

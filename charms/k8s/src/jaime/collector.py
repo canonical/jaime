@@ -89,9 +89,7 @@ def _fmt_volumes(spec: dict) -> list[dict]:
     mounts_by_name: dict[str, list[str]] = {}
     for container in spec.get("containers", []):
         for m in container.get("volumeMounts", []):
-            mounts_by_name.setdefault(m.get("name", ""), []).append(
-                m.get("mountPath", "")
-            )
+            mounts_by_name.setdefault(m.get("name", ""), []).append(m.get("mountPath", ""))
     volumes = []
     for v in spec.get("volumes", []):
         source = "unknown"
@@ -99,11 +97,13 @@ def _fmt_volumes(spec: dict) -> list[dict]:
             if key in v:
                 source = fmt(v[key])
                 break
-        volumes.append({
-            "name": v.get("name", ""),
-            "source": source,
-            "mounts": mounts_by_name.get(v.get("name", ""), []),
-        })
+        volumes.append(
+            {
+                "name": v.get("name", ""),
+                "source": source,
+                "mounts": mounts_by_name.get(v.get("name", ""), []),
+            }
+        )
     return volumes
 
 
@@ -179,10 +179,7 @@ def _plan_results(plan: dict, spec: dict, selected: list[dict]) -> dict:
         present = {c.get("name", "") for c in spec.get("containers", [])}
         results["plan_containers"] = {
             "type": "plan",
-            "items": [
-                {"name": name, "status": "found" if name in present else "not found"}
-                for name in names
-            ],
+            "items": [{"name": name, "status": "found" if name in present else "not found"} for name in names],
         }
 
     env_names = plan.get("env_variables")
@@ -190,10 +187,7 @@ def _plan_results(plan: dict, spec: dict, selected: list[dict]) -> dict:
         declared = _declared_env_names(selected)
         results["env_variables"] = {
             "type": "plan",
-            "items": [
-                {"name": name, "status": "set" if name in declared else "unset"}
-                for name in env_names
-            ],
+            "items": [{"name": name, "status": "set" if name in declared else "unset"} for name in env_names],
         }
 
     ports = plan.get("ports")
@@ -297,7 +291,9 @@ def collect_context(
         if plan_containers and cs.get("name") not in plan_containers:
             continue
         logs = client.get_pod_logs(
-            pod_name, container=cs.get("name"), previous=True,
+            pod_name,
+            container=cs.get("name"),
+            previous=True,
             tail_lines=_FETCH_LINES_CAP,
         )
         if logs:
@@ -338,18 +334,9 @@ def collect_context(
         "node": spec.get("nodeName", ""),
         "pod_ip": status.get("podIP", ""),
         "qos": status.get("qosClass", ""),
-        "conditions": [
-            f"{c.get('type')}={c.get('status')}"
-            for c in status.get("conditions", [])
-        ],
-        "containers": [
-            _container_detail(cs)
-            for cs in status.get("containerStatuses", [])
-        ],
-        "init_containers": [
-            _container_detail(cs)
-            for cs in status.get("initContainerStatuses", [])
-        ],
+        "conditions": [f"{c.get('type')}={c.get('status')}" for c in status.get("conditions", [])],
+        "containers": [_container_detail(cs) for cs in status.get("containerStatuses", [])],
+        "init_containers": [_container_detail(cs) for cs in status.get("initContainerStatuses", [])],
         "volumes": _fmt_volumes(spec),
     }
 

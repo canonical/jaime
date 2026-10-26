@@ -203,10 +203,7 @@ def validate_k8s_diagnostics(plan):
 
     errors = []
     if len(plan) > K8S_DIAGNOSTICS_CAPS["applications"]:
-        errors.append(
-            f"too many applications: {len(plan)} "
-            f"(max {K8S_DIAGNOSTICS_CAPS['applications']})"
-        )
+        errors.append(f"too many applications: {len(plan)} (max {K8S_DIAGNOSTICS_CAPS['applications']})")
 
     for app, cfg in plan.items():
         if not isinstance(cfg, dict):
@@ -215,16 +212,10 @@ def validate_k8s_diagnostics(plan):
 
         unknown = [k for k in cfg if k not in _K8S_PLAN_KEYS]
         if unknown:
-            errors.append(
-                f"'{app}' has unknown keys: {', '.join(sorted(unknown))}"
-            )
+            errors.append(f"'{app}' has unknown keys: {', '.join(sorted(unknown))}")
 
-        _validate_string_list(
-            cfg, app, "containers", K8S_DIAGNOSTICS_CAPS["containers"], errors
-        )
-        _validate_string_list(
-            cfg, app, "env_variables", K8S_DIAGNOSTICS_CAPS["env_variables"], errors
-        )
+        _validate_string_list(cfg, app, "containers", K8S_DIAGNOSTICS_CAPS["containers"], errors)
+        _validate_string_list(cfg, app, "env_variables", K8S_DIAGNOSTICS_CAPS["env_variables"], errors)
         _validate_log_patterns(cfg, app, errors)
         _validate_k8s_ports(cfg, app, errors)
 
@@ -262,10 +253,7 @@ def _validate_log_patterns(cfg, app, errors):
             errors.append(f"'{app}.log_patterns[{i}]' must be a string")
             continue
         if len(pattern) > K8S_MAX_LOG_PATTERN_CHARS:
-            errors.append(
-                f"'{app}.log_patterns[{i}]' exceeds "
-                f"{K8S_MAX_LOG_PATTERN_CHARS} characters"
-            )
+            errors.append(f"'{app}.log_patterns[{i}]' exceeds {K8S_MAX_LOG_PATTERN_CHARS} characters")
             continue
         try:
             re.compile(pattern)

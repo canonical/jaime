@@ -10,19 +10,16 @@ from ops import JujuContext
 from ops.charm import CharmBase
 from ops.hookcmds import goal_state
 from ops.main import main
-from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus
+from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, ModelError
 
 from jaime.collector import collect_context
 from jaime.controller import (
     ControllerAuthError,
     ControllerError,
-    JujuControllerClient,
-    agent_conf_path,
     extract_app_metadata,
     extract_unit_statuses,
-    parse_agent_conf,
 )
-from jaime.core import CoreMixin
+from jaime.core import CREDENTIALS_REJECTED, CREDENTIALS_REQUIRED, CoreMixin
 from jaime.diagnostics import (
     build_prompt,
     make_empty_plan,
@@ -52,10 +49,11 @@ class JaimeCharm(CoreMixin, CharmBase):
         self.framework.observe(self.on.principal_relation_joined, self._on_principal_joined)
         self.framework.observe(self.on.principal_relation_broken, self._on_principal_broken)
 
-        self.framework.observe(self.on.diagnose_action, self._on_action_diagnose)
         self.framework.observe(self.on.collect_context_action, self._on_action_collect_context)
         self.framework.observe(self.on.generate_report_action, self._on_action_generate_report)
         self.framework.observe(self.on.get_suggestion_action, self._on_action_get_suggestion)
+        self.framework.observe(self.on.ask_action, self._on_action_ask)
+        self.framework.observe(self.on.list_suggestions_action, self._on_action_list_suggestions)
         self.framework.observe(self.on.show_status_action, self._on_action_show_status)
         self.framework.observe(self.on.show_usage_action, self._on_action_show_usage)
         self.framework.observe(self.on.list_incidents_action, self._on_action_list_incidents)
@@ -81,10 +79,7 @@ class JaimeCharm(CoreMixin, CharmBase):
             self.unit.status = BlockedStatus(prereq)
 
     def _on_update_status(self, event):
-        try:
-            relations = list(self.model.relations.get("principal", []))
-        except Exception:
-            relations = []
+        relations = self._principal_relations()
 
         if not relations:
             self.unit.status = MaintenanceStatus("waiting for principal relation")
@@ -109,9 +104,7 @@ class JaimeCharm(CoreMixin, CharmBase):
             statuses, other_jaime = self._fetch_co_located_statuses()
         except ControllerAuthError as e:
             logger.error("Juju controller authentication failed: %s", e)
-            self.unit.status = BlockedStatus(
-                "juju-api credentials rejected by controller"
-            )
+            self.unit.status = BlockedStatus("juju-api credentials rejected by controller")
             return
         except ControllerError as e:
             logger.warning("could not fetch co-located unit statuses: %s", e)
@@ -121,7 +114,9 @@ class JaimeCharm(CoreMixin, CharmBase):
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         for unit_name, info in statuses.items():
             self._process_unit(
-                unit_name, info["status"], info.get("since") or now_iso,
+                unit_name,
+                info["status"],
+                info.get("since") or now_iso,
                 info.get("message", ""),
             )
 
@@ -143,7 +138,7 @@ class JaimeCharm(CoreMixin, CharmBase):
         """
         watch = self._watch_applications()
         wildcard = "*" in watch
-        tracked = {name.split("/")[0] for name in self._status_tracker._state}
+        tracked = {name.split("/")[0] for name in self._status_tracker.units()}
         apps = []
         principal = self._get_principal_name()
         if principal:
@@ -154,12 +149,6 @@ class JaimeCharm(CoreMixin, CharmBase):
             if wildcard or app in watch:
                 apps.append(app)
         return apps
-
-    def _resolve_juju_password(self) -> str:
-        """Resolve the Juju API password from config (plain or secret URI)."""
-        return self._resolve_secret(
-            self.model.config.get("juju-api-password", ""), "password"
-        )
 
     def _machine_id(self) -> str | None:
         """This unit's machine id (JUJU_MACHINE_ID), via the ops JujuContext.
@@ -185,22 +174,14 @@ class JaimeCharm(CoreMixin, CharmBase):
         if not self._watch_applications():
             return None
 
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            return "juju-api-user and juju-api-password must be configured"
+        if not self._has_controller_credentials():
+            return CREDENTIALS_REQUIRED
 
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            return None
         try:
-            conf = parse_agent_conf(conf_path)
-            with JujuControllerClient(
-                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-            ) as client:
-                client.login(username, password)
+            with self._controller_session():
+                pass
         except ControllerAuthError:
-            return "juju-api credentials rejected by controller"
+            return CREDENTIALS_REJECTED
         except Exception as e:
             logger.debug("controller prerequisite check failed: %s", e)
             return None
@@ -214,22 +195,7 @@ class JaimeCharm(CoreMixin, CharmBase):
         too because it is already handled by ``_log_principal_status``, and
         processing it twice per cycle would corrupt its incident counters.
         """
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            raise ControllerError(
-                "juju-api-user and juju-api-password must be configured"
-            )
-
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            raise ControllerError("agent.conf not found: cannot locate controller")
-
-        conf = parse_agent_conf(conf_path)
-        with JujuControllerClient(
-            conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-        ) as client:
-            client.login(username, password)
+        with self._controller_session() as client:
             full = client.full_status()
 
         machine = self._machine_id()
@@ -251,13 +217,8 @@ class JaimeCharm(CoreMixin, CharmBase):
         if principal_app:
             exclude.append(principal_app)
 
-        statuses = extract_unit_statuses(
-            full, watch_applications=watch_filter, exclude_applications=exclude
-        )
-        statuses = {
-            name: info for name, info in statuses.items()
-            if info.get("machine") == machine
-        }
+        statuses = extract_unit_statuses(full, watch_applications=watch_filter, exclude_applications=exclude)
+        statuses = {name: info for name, info in statuses.items() if info.get("machine") == machine}
         return statuses, other_jaime
 
     def _other_jaime_units(self, full_status: dict, machine: str | None) -> list[str]:
@@ -273,10 +234,9 @@ class JaimeCharm(CoreMixin, CharmBase):
             return []
         all_units = extract_unit_statuses(full_status)
         return sorted(
-            name for name, info in all_units.items()
-            if name != self.unit.name
-            and name.split("/")[0] == self.app.name
-            and info.get("machine") == machine
+            name
+            for name, info in all_units.items()
+            if name != self.unit.name and name.split("/")[0] == self.app.name and info.get("machine") == machine
         )
 
     def _report_other_jaime_units(self, other_jaime: list[str]) -> None:
@@ -329,9 +289,7 @@ class JaimeCharm(CoreMixin, CharmBase):
             messages = self._principal_status_messages()
 
         for unit_name, status, since_iso in observations:
-            self._process_unit(
-                unit_name, status, since_iso, messages.get(unit_name, "")
-            )
+            self._process_unit(unit_name, status, since_iso, messages.get(unit_name, ""))
 
     def _principal_status_messages(self) -> dict[str, str]:
         """Workload status messages for the principal unit, keyed by unit name.
@@ -347,36 +305,18 @@ class JaimeCharm(CoreMixin, CharmBase):
         principal_app = self._get_principal_name()
         if not principal_app:
             return {}
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            return {}
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            return {}
-        try:
-            conf = parse_agent_conf(conf_path)
-            with JujuControllerClient(
-                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-            ) as client:
-                client.login(username, password)
-                full = client.full_status()
-            statuses = extract_unit_statuses(full, watch_applications=[principal_app])
-            return {
-                name: info.get("message", "")
-                for name, info in statuses.items()
-                if info.get("message")
-            }
-        except Exception as e:
-            logger.debug("could not fetch principal status messages: %s", e)
-            return {}
+
+        def messages(client):
+            statuses = extract_unit_statuses(client.full_status(), watch_applications=[principal_app])
+            return {name: info.get("message", "") for name, info in statuses.items() if info.get("message")}
+
+        return self._controller_query(messages, {}, "principal status messages")
 
     # ------------------------------------------------------------------
     # Substrate hooks used by CoreMixin
     # ------------------------------------------------------------------
 
-    def _collect_incident_context(self, unit_name: str, since_iso: str,
-                                  incident: Incident) -> dict:
+    def _collect_incident_context(self, unit_name: str, since_iso: str, incident: Incident) -> dict:
         """Collect local diagnostic context on the machine (plan-driven)."""
         log_window = self.model.config.get("log-window-minutes", 30)
         max_lines = self.model.config.get("max-context-lines", 500)
@@ -387,18 +327,23 @@ class JaimeCharm(CoreMixin, CharmBase):
         diagnostics_plan = read_diagnostics_file(self._diagnostics_path)
 
         context = collect_context(
-            unit_name, log_window, max_lines,
+            unit_name,
+            log_window,
+            max_lines,
             from_time=from_dt,
             diagnostics_plan=diagnostics_plan,
         )
-        write_event({
-            "event": "context-collected",
-            "unit": unit_name,
-            "incident_id": incident.id,
-            "log_lines": len(context.get("unit_logs", [])),
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }, self.model.config.get("audit-log-path", ""))
-        context["app_metadata"] = self._fetch_principal_app_metadata()
+        write_event(
+            {
+                "event": "context-collected",
+                "unit": unit_name,
+                "incident_id": incident.id,
+                "log_lines": len(context.get("unit_logs", [])),
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            },
+            self.model.config.get("audit-log-path", ""),
+        )
+        self._add_principal_controller_details(context)
         return context
 
     def _collect_report_context(self, unit_name: str, since_iso: str) -> dict:
@@ -407,42 +352,36 @@ class JaimeCharm(CoreMixin, CharmBase):
         max_lines = self.model.config.get("max-context-lines", 500)
         diagnostics_plan = read_diagnostics_file(self._diagnostics_path)
         context = collect_context(
-            unit_name, log_window, max_lines,
+            unit_name,
+            log_window,
+            max_lines,
             diagnostics_plan=diagnostics_plan,
         )
-        context["app_metadata"] = self._fetch_principal_app_metadata()
+        self._add_principal_controller_details(context)
         return context
 
-    def _fetch_principal_app_metadata(self) -> dict:
-        """Charm metadata (channel, revision, ...) of the principal for the report.
+    def _add_principal_controller_details(self, context: dict) -> None:
+        """Add the principal's charm details and live config to a report context.
 
-        Best-effort: returns ``{}`` (and the report omits the detail lines) when
+        Best-effort: both are left out (and the report omits those parts) when
         the principal cannot be resolved or the operator has not configured
         controller credentials. The principal's status is read from goal-state,
-        which carries no channel or revision, so the controller is the only
-        source for these fields.
+        which carries no channel, revision or config values, so the controller
+        is the only source for them.
         """
         principal_app = self._get_principal_name()
         if not principal_app:
-            return {}
-        username = self.model.config.get("juju-api-user", "")
-        password = self._resolve_juju_password()
-        if not username or not password:
-            return {}
-        conf_path = agent_conf_path(unit_name=self.unit.name)
-        if conf_path is None:
-            return {}
-        try:
-            conf = parse_agent_conf(conf_path)
-            with JujuControllerClient(
-                conf["api_address"], conf["ca_cert"], conf["model_uuid"]
-            ) as client:
-                client.login(username, password)
-                full = client.full_status()
-            return extract_app_metadata(full, principal_app)
-        except Exception as e:
-            logger.debug("could not fetch principal app metadata: %s", e)
-            return {}
+            return
+        context["app_metadata"] = self._controller_query(
+            lambda client: extract_app_metadata(client.full_status(), principal_app),
+            {},
+            "principal app metadata",
+        )
+        context["juju_config"] = self._controller_query(
+            lambda client: client.application_get(principal_app).get("config", {}),
+            {},
+            "principal config",
+        )
 
     # ------------------------------------------------------------------
     # Diagnostics plan
@@ -538,47 +477,28 @@ class JaimeCharm(CoreMixin, CharmBase):
         logger.info("AI-generated monitoring plan written to %s", self._diagnostics_path)
         self.unit.status = ActiveStatus("Ready")
 
-    def _get_principal_name(self):
+    def _principal_relations(self) -> list:
+        """The ``principal`` relations, or none when the model cannot be read."""
         try:
-            rels = self.model.relations.get("principal", [])
-            if rels:
-                return rels[0].app.name
-        except Exception:
-            pass
-        return None
+            return list(self.model.relations.get("principal", []))
+        except ModelError as e:
+            logger.debug("could not read the principal relation: %s", e)
+            return []
+
+    def _get_principal_name(self):
+        relations = self._principal_relations()
+        return relations[0].app.name if relations else None
 
     # ------------------------------------------------------------------
     # Actions (machine-specific)
     # ------------------------------------------------------------------
 
-    def _on_action_diagnose(self, event):
-        logger.info("diagnose action invoked")
-        principal = None
-        try:
-            rels = self.model.relations.get("principal") or []
-            if rels:
-                rel = rels[0]
-                principal = list(rel.units)[0].name if list(rel.units) else None
-        except Exception:
-            principal = None
-
-        result = {
-            "principal-unit": principal or "unknown",
-            "jaime-unit": self.unit.name,
-            "jaime-mode": self.model.config.get("mode"),
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }
-        event.set_results(result)
-
     def _principal_unit_name(self):
         """Name of the first related principal unit, or None."""
-        try:
-            for rel in self.model.relations.get("principal", []):
-                units = list(rel.units)
-                if units:
-                    return units[0].name
-        except Exception:
-            pass
+        for rel in self._principal_relations():
+            units = list(rel.units)
+            if units:
+                return units[0].name
         return None
 
     def _on_action_collect_context(self, event):
@@ -590,9 +510,7 @@ class JaimeCharm(CoreMixin, CharmBase):
             return
 
         context = self._collect_report_context(unit, "")
-        path = os.path.join(
-            self._context_dir, f"{unit.replace('/', '-')}-context.json"
-        )
+        path = os.path.join(self._context_dir, f"{unit.replace('/', '-')}-context.json")
         try:
             os.makedirs(self._context_dir, exist_ok=True)
             with open(path, "w") as f:

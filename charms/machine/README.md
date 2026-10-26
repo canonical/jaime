@@ -29,7 +29,6 @@ juju refresh jaime --channel=0.1/stable
 ## Actions
 
 ```bash
-juju run jaime/0 diagnose              # Basic principal info
 juju run jaime/0 collect-context       # Write a context bundle and return its path
 juju run jaime/0 generate-report       # Report for the current open incident
 juju run jaime/0 get-suggestion        # AI suggestion for the current incident

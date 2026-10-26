@@ -27,18 +27,18 @@ class TestGeminiProvider:
         provider = GeminiProvider("test-token", "gemini-2.0-pro")
         assert provider._model == "gemini-2.0-pro"
 
-    @patch("jaime.providers.gemini.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_success(self, mock_urlopen):
-        payload = json.dumps({
-            "candidates": [
-                {"content": {"parts": [{"text": "Hello from Gemini"}]}}
-            ],
-            "usageMetadata": {
-                "promptTokenCount": 10,
-                "candidatesTokenCount": 5,
-                "totalTokenCount": 15,
-            },
-        }).encode()
+        payload = json.dumps(
+            {
+                "candidates": [{"content": {"parts": [{"text": "Hello from Gemini"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 5,
+                    "totalTokenCount": 15,
+                },
+            }
+        ).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
 
         provider = GeminiProvider("test-token")
@@ -52,14 +52,14 @@ class TestGeminiProvider:
         assert usage.cost_usd is None
         assert usage.model == "gemini-2.0-flash"
 
-    @patch("jaime.providers.gemini.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_missing_usage_metadata_returns_zeros(self, mock_urlopen):
         """When usageMetadata is absent, usage fields default to zero."""
-        payload = json.dumps({
-            "candidates": [
-                {"content": {"parts": [{"text": "Hello"}]}}
-            ],
-        }).encode()
+        payload = json.dumps(
+            {
+                "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            }
+        ).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
 
         provider = GeminiProvider("test-token")
@@ -69,7 +69,7 @@ class TestGeminiProvider:
         assert usage.prompt_tokens == 0
         assert usage.total_tokens == 0
 
-    @patch("jaime.providers.gemini.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_no_candidates_raises(self, mock_urlopen):
         payload = json.dumps({"candidates": []}).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
@@ -78,18 +78,16 @@ class TestGeminiProvider:
         with pytest.raises(RuntimeError, match="no candidates"):
             provider.generate("test")
 
-    @patch("jaime.providers.gemini.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_no_parts_raises(self, mock_urlopen):
-        payload = json.dumps({
-            "candidates": [{"content": {"parts": []}}]
-        }).encode()
+        payload = json.dumps({"candidates": [{"content": {"parts": []}}]}).encode()
         mock_urlopen.return_value = _mock_urlopen_response(payload)
 
         provider = GeminiProvider("test-token")
         with pytest.raises(RuntimeError, match="no parts"):
             provider.generate("test")
 
-    @patch("jaime.providers.gemini.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_http_error_raises(self, mock_urlopen):
         import urllib.error
 
@@ -107,7 +105,7 @@ class TestGeminiProvider:
         with pytest.raises(urllib.error.HTTPError):
             provider.generate("test")
 
-    @patch("jaime.providers.gemini.urllib.request.urlopen")
+    @patch("urllib.request.urlopen")
     def test_generate_url_error_raises(self, mock_urlopen):
         import urllib.error
 
@@ -116,4 +114,3 @@ class TestGeminiProvider:
         provider = GeminiProvider("test-token")
         with pytest.raises(urllib.error.URLError):
             provider.generate("test")
-

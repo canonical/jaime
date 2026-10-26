@@ -31,6 +31,53 @@ def _append(lines: list[str], *chunks: list[str]) -> None:
         lines.append("")
 
 
+def _append_fenced(lines: list[str], title: str, body: list[str]) -> None:
+    """Append ``title`` and ``body`` in a code fence; nothing when ``body`` is empty."""
+    if body:
+        _append(lines, [title, "```", *body, "```"])
+
+
+def _icon(ok: bool) -> str:
+    return "✓" if ok else "✗"
+
+
+def _plan_results(context: dict) -> dict:
+    return context.get("plan_results", {})
+
+
+def _plan_items(context: dict, key: str) -> list[dict] | None:
+    """Items of a plan-driven section, or None when it is absent or not a plan."""
+    section = _plan_results(context).get(key)
+    if section and section["type"] == "plan":
+        return section.get("items", [])
+    return None
+
+
+def _parse_yaml(text: str, what: str):
+    """Parse a charm YAML file; None (logged at debug level) when it is invalid."""
+    try:
+        return yaml.safe_load(text)
+    except (yaml.YAMLError, ValueError) as e:
+        logger.debug("could not parse charm %s YAML: %s", what, e)
+        return None
+
+
+def _charm_config_options(context: dict) -> dict | None:
+    """The principal charm's declared options (``config.yaml``), name to schema.
+
+    None when no ``config.yaml`` was collected, and an empty dict when it is
+    present but unparsable or has no usable ``options`` mapping.
+    """
+    config_yaml = (context.get("charm_config") or {}).get("config_yaml", "")
+    if not config_yaml:
+        return None
+    parsed = _parse_yaml(config_yaml, "config")
+    options = parsed.get("options") if isinstance(parsed, dict) else None
+    if not isinstance(options, dict):
+        return {}
+    return {name: opt for name, opt in options.items() if isinstance(opt, dict)}
+
+
 _LOG_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})")
 
 
@@ -59,7 +106,7 @@ def compact_log_lines(lines: list[str]) -> list[str]:
         m = _LOG_TIMESTAMP_RE.match(line)
         if m:
             ts = f"{m.group(1)} {m.group(2)}"
-            message = line[m.end():].strip()
+            message = line[m.end() :].strip()
             if message == last_message:
                 run += 1
                 continue
@@ -106,42 +153,75 @@ def digest_network_ports(lines: list[str]) -> list[str]:
     return result
 
 
-def _config_value_display(key: str, opt: dict) -> str:
-    """Value rendering for a Juju config option, redacted when sensitive."""
-    return redact_config_value(key, opt.get("value"), opt.get("type"))
+def _config_options(context: dict) -> tuple[list[dict], bool] | None:
+    """The monitored charm's config options with their current state.
+
+    Merges the declared options (``config.yaml``, machine charm) with the live
+    values from the controller (``juju_config``, whenever controller
+    credentials are available). Each option is a dict with ``name``, ``value``,
+    ``default``, ``type`` and ``changed`` (true when the live value differs
+    from the default). Returns ``(options, live)`` where ``live`` says whether
+    current values are known; without them ``value`` is the declared default
+    and nothing is marked changed. None when there is no config data at all.
+    """
+    declared = _charm_config_options(context)
+    live_options = context.get("juju_config") or {}
+    if declared is None and not live_options:
+        return None
+
+    options = []
+    for name in sorted(set(declared or {}) | set(live_options)):
+        schema = (declared or {}).get(name, {})
+        live = live_options.get(name)
+        if live is None:
+            default = schema.get("default")
+            options.append(
+                {"name": name, "value": default, "default": default, "type": schema.get("type"), "changed": False}
+            )
+            continue
+        value = live.get("value", live.get("default"))
+        default = live.get("default", schema.get("default"))
+        # An option is changed when the operator set it to something other than
+        # the default; setting it to the default value again changes nothing.
+        changed = live.get("source") == "user" and (default is None or str(value) != str(default))
+        options.append(
+            {
+                "name": name,
+                "value": value,
+                "default": default,
+                "type": live.get("type") or schema.get("type"),
+                "changed": changed,
+            }
+        )
+    return options, bool(live_options)
 
 
-def _config_line(key: str, opt: dict) -> str:
-    """One config option as a Markdown list item.
+def _shown(option: dict, key: str) -> str:
+    """Redacted rendering of an option's ``value`` or ``default``; empty shows as ``""``."""
+    return redact_config_value(option["name"], option[key], option["type"]) or '""'
+
+
+def _config_line(option: dict) -> str:
+    """One changed option as a Markdown list item.
 
     A sensitive option keeps its name and drops the value and default, so the
     report stays diagnostic without exposing either.
     """
-    value = _config_value_display(key, opt)
-    if is_secret_option(key, opt.get("value"), opt.get("type")):
-        return f"- `{key}`: `{value}`"
-    default = redact_text("" if opt.get("default") is None else str(opt.get("default")))
-    return f"- `{key}`: `{value}` (default: `{default}`)"
+    value = _shown(option, "value")
+    if is_secret_option(option["name"], option["value"], option["type"]):
+        return f"- `{option['name']}`: `{value}`"
+    return f"- `{option['name']}`: `{value}` (default: `{_shown(option, 'default')}`)"
 
 
-def generate_report(
+def _report_header(
     incident_id: str,
     unit_name: str,
     workload: str,
     first_seen: str,
     context: dict,
-    report_dir: str = "",
-    status_message: str = "",
-) -> str:
-    """Generate a Markdown context report and write it to disk.
-
-    Falls back to _DEFAULT_REPORT_DIR if report_dir is empty.
-    Returns the path of the written report file.
-    """
-    report_dir = report_dir or _DEFAULT_REPORT_DIR
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    lines = []
-
+    status_message: str,
+) -> list[str]:
+    """The ``# Incident Report`` title and its key/value block."""
     header = [
         "# Incident Report",
         f"- incident: {incident_id}",
@@ -166,43 +246,49 @@ def generate_report(
     header.append(f"- status: {workload}")
     if status_message:
         header.append(f"- status-message: {status_message}")
-    header.extend([
-        f"- first-seen: {first_seen}",
-        f"- generated: {now}",
-    ])
-    _append(lines, header)
+    header.extend(
+        [
+            f"- first-seen: {first_seen}",
+            f"- generated: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+        ]
+    )
+    return header
 
-    plan_results = context.get("plan_results", {})
 
-    _append_section_summary(lines, workload, context, plan_results, status_message)
-    _append_section_plan_containers(lines, plan_results)
-    _append_section_network(lines, plan_results)
-    _append_section_ss_connections(lines, context)
-    _append_section_firewall_rules(lines, context)
-    _append_section_log_files(lines, plan_results)
-    _append_section_processes(lines, plan_results)
-    _append_section_systemd(lines, plan_results, context)
-    _append_section_env(lines, plan_results)
-    _append_section_health_commands(lines, plan_results)
+def render_report(
+    incident_id: str,
+    unit_name: str,
+    workload: str,
+    first_seen: str,
+    context: dict,
+    status_message: str = "",
+) -> str:
+    """Render the Markdown context report, with secrets redacted."""
+    lines: list[str] = []
+    _append(lines, _report_header(incident_id, unit_name, workload, first_seen, context, status_message))
+    _append_section_summary(lines, workload, context, status_message)
+    for append_section in _SECTIONS:
+        append_section(lines, context)
+    return redact_text("\n".join(lines))
 
-    # Background sections
-    _append_section_snap(lines, context)
-    _append_section_snap_list(lines, context)
-    _append_section_journal(lines, context)
-    _append_section_k8s_pod(lines, context)
-    _append_section_k8s_previous_logs(lines, context)
-    _append_section_k8s_events(lines, context)
-    _append_section_k8s_resource_usage(lines, context)
-    _append_section_juju_config(lines, context)
-    _append_section_charm_config(lines, context)
-    _append_section_charm_actions(lines, context)
-    _append_section_charm_metadata(lines, context)
-    _append_section_disk(lines, context)
-    _append_section_memory(lines, context)
-    _append_section_logs(lines, context)
 
-    content = redact_text("\n".join(lines))
+def generate_report(
+    incident_id: str,
+    unit_name: str,
+    workload: str,
+    first_seen: str,
+    context: dict,
+    report_dir: str = "",
+    status_message: str = "",
+) -> str:
+    """Generate a Markdown context report and write it to disk.
 
+    Falls back to _DEFAULT_REPORT_DIR if report_dir is empty.
+    Returns the path of the written report file.
+    """
+    content = render_report(incident_id, unit_name, workload, first_seen, context, status_message)
+
+    report_dir = report_dir or _DEFAULT_REPORT_DIR
     os.makedirs(report_dir, exist_ok=True)
     report_path = os.path.join(report_dir, f"{incident_id}.md")
     with open(report_path, "w") as f:
@@ -217,9 +303,7 @@ def generate_report(
 # ---------------------------------------------------------------------------
 
 
-def _append_section_summary(lines: list[str], workload: str,
-                             context: dict, plan_results: dict,
-                             status_message: str = "") -> None:
+def _append_section_summary(lines: list[str], workload: str, context: dict, status_message: str = "") -> None:
     """Compact executive summary — highest-signal content first.
 
     Surfaces the workload status message (what Juju reports as the reason the
@@ -235,10 +319,7 @@ def _append_section_summary(lines: list[str], workload: str,
     # of identical failures (e.g. health-check errors firing every few seconds)
     # cannot push the causal error out of the summary.
     unit_logs = context.get("unit_logs", [])
-    error_lines = [
-        line for line in unit_logs
-        if "ERROR" in line.upper() or "WARNING" in line.upper()
-    ]
+    error_lines = [line for line in unit_logs if "ERROR" in line.upper() or "WARNING" in line.upper()]
     error_lines = deduplicate_lines(error_lines)[-10:]
     if error_lines:
         summary.append("")
@@ -247,84 +328,58 @@ def _append_section_summary(lines: list[str], workload: str,
         summary.extend(error_lines)
         summary.append("```")
 
-    # Operator-changed Juju config options (k8s: from Application.Get).
-    # These show operator intent and are often directly tied to the incident.
-    juju_config = context.get("juju_config", {})
-    user_changed = {
-        k: v for k, v in juju_config.items() if v.get("source") == "user"
-    }
-    if user_changed:
+    # Config options the operator changed from their default. These show
+    # operator intent and are often directly tied to the incident.
+    merged = _config_options(context)
+    changed = [opt for opt in (merged[0] if merged else []) if opt["changed"]]
+    if changed:
         summary.append("")
         summary.append("**Config changed from default by operator:**")
-        for k, v in sorted(user_changed.items()):
-            summary.append(_config_line(k, v))
-
-    # Charm config options that are explicitly set (non-empty, non-False).
-    charm_config = context.get("charm_config", {})
-    config_yaml = charm_config.get("config_yaml", "")
-    if config_yaml:
-        try:
-            parsed = yaml.safe_load(config_yaml)
-            options = (parsed or {}).get("options", {})
-            set_options = {
-                k: v.get("default")
-                for k, v in options.items()
-                if v.get("default") not in (None, "", False, "False", "false")
-            }
-            if set_options:
-                summary.append("")
-                summary.append("**Charm options with non-empty schema defaults:**")
-                for k, v in sorted(set_options.items()):
-                    summary.append(f"- `{k}`: `{v}`")
-        except Exception:
-            pass
+        summary.extend(_config_line(opt) for opt in changed)
 
     _append(lines, summary)
 
 
-def _append_section_log_files(lines: list[str], plan_results: dict) -> None:
-    section = plan_results.get("log_files")
+def _append_section_log_files(lines: list[str], context: dict) -> None:
+    items = _plan_items(context, "log_files")
+    if items is None:
+        return
+
+    block = ["## Log files"]
+    for item in items:
+        path = item.get("path", "")
+        priority = item.get("priority", "")
+        status = item.get("status", "")
+        desc = item.get("description", "")
+        tag = f" ({priority})" if priority else ""
+        label = f"{path}{tag} — _{desc}_" if desc else f"{path}{tag}"
+        if status == "available":
+            block.append(f"- {label} ✓")
+            item_lines = item.get("lines", [])
+            if item_lines:
+                block.extend(["```", *item_lines, "```"])
+        else:
+            block.append(f"- {label} ✗ ({status})")
+    _append(lines, block)
+
+
+def _append_section_processes(lines: list[str], context: dict) -> None:
+    section = _plan_results(context).get("processes")
     if not section:
         return
 
     if section["type"] == "plan":
-        _append(lines, ["## Log files"])
-        for item in section.get("items", []):
-            path = item.get("path", "")
-            priority = item.get("priority", "")
-            status = item.get("status", "")
-            desc = item.get("description", "")
-            tag = f" ({priority})" if priority else ""
-            label = f"{path}{tag} — _{desc}_" if desc else f"{path}{tag}"
-            if status == "available":
-                _append(lines, [f"- {label} ✓"])
-                item_lines = item.get("lines", [])
-                if item_lines:
-                    _append(lines, ["```", *item_lines, "```"])
-            else:
-                _append(lines, [f"- {label} ✗ ({status})"])
-
-
-def _append_section_processes(lines: list[str], plan_results: dict) -> None:
-    section = plan_results.get("processes")
-    if not section:
-        return
-
-    if section["type"] == "plan":
-        _append(lines, ["## Processes"])
+        block = ["## Processes"]
         for item in section.get("items", []):
             name = item.get("name", "")
             count = item.get("running_count", 0)
             expected_min = item.get("expected_min_count", 1)
             expected_max = item.get("expected_max_count", 1)
-            status = item.get("status", "")
             summary = f"{count} running (expected {expected_min}-{expected_max})"
-            icon = "✓" if status == "ok" else "✗"
-            _append(lines, [f"- **{name}**: {summary} {icon}"])
+            block.append(f"- **{name}**: {summary} {_icon(item.get('status', '') == 'ok')}")
+        _append(lines, block)
     else:
-        raw_lines = section.get("lines", [])
-        if raw_lines:
-            _append(lines, ["## Processes", "```", *raw_lines, "```"])
+        _append_fenced(lines, "## Processes", section.get("lines", []))
 
 
 def _systemd_line(item: dict) -> str:
@@ -335,7 +390,6 @@ def _systemd_line(item: dict) -> str:
     """
     unit = item.get("unit", "")
     status = item.get("status", "")
-    icon = "✓" if status == "active" else "✗"
     detail = []
     if item.get("substate"):
         detail.append(str(item["substate"]))
@@ -344,41 +398,35 @@ def _systemd_line(item: dict) -> str:
     if item.get("exec_main_status") not in (None, "", "0"):
         detail.append(f"exec={item['exec_main_status']}")
     suffix = f" ({', '.join(detail)})" if detail else ""
-    return f"- `{unit}` → {status}{suffix} {icon}"
+    return f"- `{unit}` → {status}{suffix} {_icon(status == 'active')}"
 
 
-def _append_section_systemd(lines: list[str], plan_results: dict, context: dict) -> None:
-    section = plan_results.get("systemd_units")
+def _append_section_systemd(lines: list[str], context: dict) -> None:
+    items = _plan_items(context, "systemd_units")
+    if items is not None:
+        _append(lines, ["## Systemd units", *[_systemd_line(item) for item in items]])
+        return
 
-    if section and section["type"] == "plan":
-        _append(lines, ["## Systemd units"])
-        for item in section.get("items", []):
-            _append(lines, [_systemd_line(item)])
+    section = _plan_results(context).get("systemd_units")
+    systemd_failed = context.get("systemd_failed", [])
+    if not section and not systemd_failed:
+        return
+
+    detail = context.get("systemd_failed_detail", [])
+    broad_lines = section.get("lines", []) if section and section["type"] == "broad" else []
+    if detail:
+        entries = [_systemd_line(item) for item in detail]
+    elif systemd_failed:
+        entries = [f"- `{unit}`" for unit in systemd_failed]
+    elif broad_lines:
+        entries = [f"- `{unit_line}`" for unit_line in broad_lines]
     else:
-        systemd_failed = context.get("systemd_failed", [])
-        detail = context.get("systemd_failed_detail", [])
-        if not section and not systemd_failed:
-            return
-        _append(lines, ["## Failed systemd units"])
-        if detail:
-            for item in detail:
-                _append(lines, [_systemd_line(item)])
-        elif systemd_failed:
-            for unit in systemd_failed:
-                _append(lines, [f"- `{unit}`"])
-        elif section and section["type"] == "broad":
-            broad_lines = section.get("lines", [])
-            if broad_lines:
-                for unit_line in broad_lines:
-                    _append(lines, [f"- `{unit_line}`"])
-            else:
-                _append(lines, ["_None detected._"])
-        else:
-            _append(lines, ["_None detected._"])
+        entries = ["_None detected._"]
+    _append(lines, ["## Failed systemd units", *entries])
 
 
-def _append_section_network(lines: list[str], plan_results: dict) -> None:
-    section = plan_results.get("network_ports")
+def _append_section_network(lines: list[str], context: dict) -> None:
+    section = _plan_results(context).get("network_ports")
     if not section:
         return
 
@@ -391,8 +439,7 @@ def _append_section_network(lines: list[str], plan_results: dict) -> None:
             # The machine plan reports whether a port is listening; the k8s
             # plan can only report that it is declared in the pod spec. Both
             # are a pass, but the printed status keeps the distinction.
-            icon = "✓" if status in ("listening", "declared") else "✗"
-            port_lines.append(f"- `{port}/{protocol}` → {status} {icon}")
+            port_lines.append(f"- `{port}/{protocol}` → {status} {_icon(status in ('listening', 'declared'))}")
         if port_lines:
             _append(lines, ["## Network ports", *port_lines])
     else:
@@ -401,54 +448,49 @@ def _append_section_network(lines: list[str], plan_results: dict) -> None:
             _append(lines, ["## Network ports", *digest_network_ports(raw_lines)])
 
 
-def _append_section_plan_containers(lines: list[str], plan_results: dict) -> None:
-    section = plan_results.get("plan_containers")
-    if not section or section["type"] != "plan":
+def _append_section_plan_containers(lines: list[str], context: dict) -> None:
+    items = _plan_items(context, "plan_containers")
+    if items is None:
         return
 
-    _append(lines, ["## Plan containers"])
-    for item in section.get("items", []):
-        name = item.get("name", "")
-        status = item.get("status", "")
-        if status == "found":
-            _append(lines, [f"- `{name}` → found ✓"])
-        else:
-            _append(lines, [f"- `{name}` → not found ✗"])
+    entries = [
+        f"- `{item.get('name', '')}` → {'found ✓' if item.get('status', '') == 'found' else 'not found ✗'}"
+        for item in items
+    ]
+    _append(lines, ["## Plan containers", *entries])
 
 
-def _append_section_env(lines: list[str], plan_results: dict) -> None:
-    section = plan_results.get("env_variables")
-    if not section or section["type"] != "plan":
+def _append_section_env(lines: list[str], context: dict) -> None:
+    items = _plan_items(context, "env_variables")
+    if items is None:
         return
 
-    _append(lines, ["## Environment variables"])
-    _append(lines, ["_Only whether each variable is set; values are never collected._"])
-    for item in section.get("items", []):
-        name = item.get("name", "")
-        status = item.get("status", "")
-        if status == "set":
-            _append(lines, [f"- `{name}` — set ✓"])
-        else:
-            _append(lines, [f"- `{name}` — unset ✗"])
+    entries = [
+        f"- `{item.get('name', '')}` — {'set ✓' if item.get('status', '') == 'set' else 'unset ✗'}" for item in items
+    ]
+    _append(
+        lines,
+        ["## Environment variables", "_Only whether each variable is set; values are never collected._", *entries],
+    )
 
 
-def _append_section_health_commands(lines: list[str], plan_results: dict) -> None:
-    section = plan_results.get("health_commands")
-    if not section or section["type"] != "plan":
+def _append_section_health_commands(lines: list[str], context: dict) -> None:
+    items = _plan_items(context, "health_commands")
+    if items is None:
         return
 
-    _append(lines, ["## Health commands"])
-    for item in section.get("items", []):
+    block = ["## Health commands"]
+    for item in items:
         command = item.get("command", "")
         returncode = item.get("returncode", 0)
         stdout = item.get("stdout", "")
         stderr = item.get("stderr", "")
-        icon = "✓" if returncode == 0 else "✗"
-        _append(lines, [f"- `$ {command}` → exit {returncode} {icon}"])
+        block.append(f"- `$ {command}` → exit {returncode} {_icon(returncode == 0)}")
         if stdout:
-            _append(lines, ["  ```", *stdout.splitlines(), "  ```"])
+            block.extend(["  ```", *stdout.splitlines(), "  ```"])
         if stderr:
-            _append(lines, ["  ```", *stderr.splitlines(), "  ```"])
+            block.extend(["  ```", *stderr.splitlines(), "  ```"])
+    _append(lines, block)
 
 
 def _append_section_snap(lines: list[str], context: dict) -> None:
@@ -463,83 +505,70 @@ def _append_section_snap(lines: list[str], context: dict) -> None:
     if not snap:
         return
 
-    services = snap.get("services", [])
-    if services:
-        _append(lines, ["## Snap services", "```", *services, "```"])
+    _append_fenced(lines, "## Snap services", snap.get("services", []))
 
     failed_services = snap.get("failed_services", [])
     if failed_services:
         _append(lines, ["**Failed services:** " + ", ".join(f"`{s}`" for s in failed_services)])
 
-    failed_changes = snap.get("failed_changes", [])
-    if failed_changes:
-        _append(lines, ["## Failed snap changes", "```", *failed_changes, "```"])
+    _append_fenced(lines, "## Failed snap changes", snap.get("failed_changes", []))
 
     for service, snap_lines in sorted((snap.get("logs") or {}).items()):
-        _append(lines, [
-            f"## Snap logs: `{service}` (failed)", "```", *snap_lines, "```",
-        ])
+        _append(lines, [f"## Snap logs: `{service}` (failed)", "```", *snap_lines, "```"])
 
 
 def _append_section_snap_list(lines: list[str], context: dict) -> None:
     """Always-on inventory of installed snaps, when snapd is present."""
-    snap_list = context.get("snap_list") or []
-    if not snap_list:
-        return
-    _append(lines, ["## Snap packages", "```", *snap_list, "```"])
+    _append_fenced(lines, "## Snap packages", context.get("snap_list") or [])
 
 
 def _append_section_journal(lines: list[str], context: dict) -> None:
     """Journalctl errors/warnings for the relevant units, time-bounded."""
     journal = context.get("journal") or []
-    if not journal:
-        return
-    _append(lines, ["## Journal (errors/warnings)", "```", *compact_log_lines(journal), "```"])
+    _append_fenced(lines, "## Journal (errors/warnings)", compact_log_lines(journal))
 
 
 def _append_section_k8s_previous_logs(lines: list[str], context: dict) -> None:
-    previous = context.get("k8s_previous_logs", [])
-    if not previous:
-        return
-    _append(lines, ["## Previous container logs", "```", *previous, "```"])
+    _append_fenced(lines, "## Previous container logs", context.get("k8s_previous_logs", []))
 
 
 def _append_section_charm_config(lines: list[str], context: dict) -> None:
-    charm_config = context.get("charm_config", {})
-    config_yaml = charm_config.get("config_yaml", "")
-    if not config_yaml:
-        return
+    """Every config option of the monitored charm, with its value.
 
-    try:
-        parsed = yaml.safe_load(config_yaml)
-        options = (parsed or {}).get("options", {}) if isinstance(parsed, dict) else {}
-    except Exception as e:
-        logger.debug("could not parse charm config YAML: %s", e)
-        options = {}
+    Options changed from their default are listed first and flagged, so they
+    survive the cap. When current values are unavailable (machine charm without
+    controller credentials) the declared defaults are shown instead, and the
+    section says so.
+    """
+    merged = _config_options(context)
+    if merged is None:
+        return
+    options, live = merged
 
     if not options:
-        # Present but unparseable/structurally broken config - surface it
+        # Present but unparsable/structurally broken config - surface it
         # instead of silently dropping the section (an invisible truncation
         # was masking the whole section before the collector byte-cap fix).
         _append(lines, ["## Charm config", "_Could not parse config.yaml._"])
         return
 
+    ordered = sorted(options, key=lambda opt: (not opt["changed"], opt["name"]))
+    body = []
+    for opt in ordered[:_MAX_CHARM_OPTIONS]:
+        line = f"{opt['name']}: {_shown(opt, 'value')}"
+        if opt["changed"]:
+            if is_secret_option(opt["name"], opt["value"], opt["type"]):
+                line += "  # changed from default"
+            else:
+                line += f"  # changed from default ({_shown(opt, 'default')})"
+        body.append(line)
+
     section = ["## Charm config"]
-    items = sorted(options.items())
-    # Empty-string defaults are schema noise: the option is declared but has
-    # no default value, so it carries no signal. Boolean/int False/0 defaults
-    # are kept because "disabled" or "off" is meaningful.
-    shown = [
-        (key, opt) for key, opt in items
-        if opt.get("default") not in (None, "")
-    ]
-    for key, opt in shown[:_MAX_CHARM_OPTIONS]:
-        default = opt.get("default", "")
-        section.append(f"- `{key}`: `{default}`")
-    if len(shown) > _MAX_CHARM_OPTIONS:
-        section.append(f"_… {len(shown) - _MAX_CHARM_OPTIONS} more options omitted._")
-    if not shown:
-        section.append("_No non-empty option defaults._")
+    if not live:
+        section.append("_Current values unavailable (no controller credentials): showing the declared defaults._")
+    section.extend(["```", *body, "```"])
+    if len(ordered) > _MAX_CHARM_OPTIONS:
+        section.append(f"_… {len(ordered) - _MAX_CHARM_OPTIONS} more options omitted._")
     _append(lines, section)
 
 
@@ -555,24 +584,18 @@ def _append_section_charm_actions(lines: list[str], context: dict) -> None:
     this section renders the action names (and their descriptions) so the
     suggestion cannot invent actions that are not there.
     """
-    charm_config = context.get("charm_config", {})
-    actions_yaml = charm_config.get("actions_yaml", "")
+    actions_yaml = (context.get("charm_config") or {}).get("actions_yaml", "")
     if not actions_yaml:
         return
 
-    try:
-        parsed = yaml.safe_load(actions_yaml)
-    except Exception as e:
-        logger.debug("could not parse charm actions YAML: %s", e)
-        return
-    actions = parsed or {}
-    if not isinstance(actions, dict) or not actions:
+    actions = _parse_yaml(actions_yaml, "actions")
+    if not isinstance(actions, dict):
         return
 
     # Only the top-level action names are declarations; a bare YAML document
     # (e.g. empty or a scalar) is not a set of actions.
     declared = {
-        name: (definition or {})
+        name: definition
         for name, definition in actions.items()
         if _ACTION_NAME_RE.match(str(name)) and isinstance(definition, dict)
     }
@@ -584,10 +607,7 @@ def _append_section_charm_actions(lines: list[str], context: dict) -> None:
     # Multi-line descriptions are collapsed to a single line so the block has
     # no empty lines inside.
     actions_block = yaml.safe_dump(
-        {
-            name: " ".join((declared[name].get("description", "") or "").split())
-            for name in sorted(declared)
-        },
+        {name: " ".join((declared[name].get("description", "") or "").split()) for name in sorted(declared)},
         sort_keys=False,
         allow_unicode=True,
     ).rstrip()
@@ -598,7 +618,13 @@ def _append_section_charm_actions(lines: list[str], context: dict) -> None:
 # project resources. Rendered so the model can reference the official
 # documentation, source, and issue tracker instead of guessing.
 _METADATA_LINK_KEYS = (
-    "docs", "website", "contact", "source", "issues", "bugs", "repository",
+    "docs",
+    "website",
+    "contact",
+    "source",
+    "issues",
+    "bugs",
+    "repository",
 )
 
 
@@ -611,17 +637,11 @@ def _append_section_charm_metadata(lines: list[str], context: dict) -> None:
     the official docs rather than invent a procedure. k8s has no equivalent:
     a pod cannot read sibling applications' charm directories.
     """
-    charm_config = context.get("charm_config", {})
-    metadata_yaml = charm_config.get("metadata_yaml", "")
+    metadata_yaml = (context.get("charm_config") or {}).get("metadata_yaml", "")
     if not metadata_yaml:
         return
 
-    try:
-        parsed = yaml.safe_load(metadata_yaml)
-    except Exception as e:
-        logger.debug("could not parse charm metadata YAML: %s", e)
-        return
-    meta = parsed or {}
+    meta = _parse_yaml(metadata_yaml, "metadata")
     if not isinstance(meta, dict):
         return
 
@@ -689,10 +709,13 @@ def _append_section_memory(lines: list[str], context: dict) -> None:
 def _append_section_logs(lines: list[str], context: dict) -> None:
     unit_logs = context.get("unit_logs", [])
     _append(lines, ["## Recent unit logs"])
-    _append(lines, [
-        "_Showing only lines matching `error` or `warning` (case-insensitive), "
-        "with a context window around the last match._"
-    ])
+    _append(
+        lines,
+        [
+            "_Showing only lines matching `error` or `warning` (case-insensitive), "
+            "with a context window around the last match._"
+        ],
+    )
     _append(lines, ["_Logs are in chronological order._"])
     if unit_logs:
         _append(lines, ["```", *compact_log_lines(unit_logs), "```"])
@@ -701,10 +724,7 @@ def _append_section_logs(lines: list[str], context: dict) -> None:
 
 
 def _append_section_ss_connections(lines: list[str], context: dict) -> None:
-    ss = context.get("ss_connections", [])
-    if not ss:
-        return
-    _append(lines, ["## Network connections (listening + active)", "```", *ss, "```"])
+    _append_fenced(lines, "## Network connections (listening + active)", context.get("ss_connections", []))
 
 
 def _append_section_firewall_rules(lines: list[str], context: dict) -> None:
@@ -712,43 +732,9 @@ def _append_section_firewall_rules(lines: list[str], context: dict) -> None:
     if not fw:
         return
 
-    iptables = fw.get("iptables", [])
-    if iptables:
-        _append(lines, ["## Firewall rules (iptables — IPv4)", "```", *iptables, "```"])
-
-    ufw = fw.get("ufw", [])
-    if ufw:
-        _append(lines, ["## Firewall rules (ufw)", "```", *ufw, "```"])
-
-    nftables = fw.get("nftables", [])
-    if nftables:
-        _append(lines, ["## Firewall rules (nftables — IPv4)", "```", *nftables, "```"])
-
-
-def _append_section_juju_config(lines: list[str], context: dict) -> None:
-    """Render the application's Juju config (from Application.Get).
-
-    Each option maps to {default, description, source, type, value}.
-    Options the operator explicitly changed (source=user) are called out
-    first — they are the most diagnostic-relevant.
-    """
-    options = context.get("juju_config", {})
-    if not options:
-        return
-
-    _append(lines, ["## Juju application config"])
-
-    changed = {k: v for k, v in options.items() if v.get("source") == "user"}
-    if changed:
-        _append(lines, ["**Changed from default:**"])
-        for key, opt in sorted(changed.items()):
-            _append(lines, [_config_line(key, opt)])
-
-    _append(lines, ["**All options:**", "```"])
-    for key, opt in sorted(options.items()):
-        marker = " *" if opt.get("source") == "user" else ""
-        _append(lines, [f"{key}: {_config_value_display(key, opt)}{marker}"])
-    _append(lines, ["```", "_(* = changed from default)_"])
+    _append_fenced(lines, "## Firewall rules (iptables — IPv4)", fw.get("iptables", []))
+    _append_fenced(lines, "## Firewall rules (ufw)", fw.get("ufw", []))
+    _append_fenced(lines, "## Firewall rules (nftables — IPv4)", fw.get("nftables", []))
 
 
 def _container_label(c: dict) -> str:
@@ -778,63 +764,93 @@ def _append_section_k8s_pod(lines: list[str], context: dict) -> None:
     if not pod:
         return
 
-    _append(lines, ["## Kubernetes pod"])
-    _append(lines, [
+    block = [
+        "## Kubernetes pod",
         f"- name: `{pod.get('name', '')}`",
         f"- phase: `{pod.get('phase', 'unknown')}`",
-    ])
+    ]
     if pod.get("node"):
-        _append(lines, [f"- node: `{pod['node']}`"])
+        block.append(f"- node: `{pod['node']}`")
     if pod.get("pod_ip"):
-        _append(lines, [f"- pod IP: `{pod['pod_ip']}`"])
+        block.append(f"- pod IP: `{pod['pod_ip']}`")
     if pod.get("qos"):
-        _append(lines, [f"- QoS class: `{pod['qos']}`"])
+        block.append(f"- QoS class: `{pod['qos']}`")
     conditions = pod.get("conditions", [])
     if conditions:
-        _append(lines, [f"- conditions: {', '.join(conditions)}"])
+        block.append(f"- conditions: {', '.join(conditions)}")
+    _append(lines, block)
 
     containers = pod.get("containers", [])
     if containers:
-        _append(lines, ["", "**Containers:**", ""])
+        block = ["**Containers:**"]
         for c in containers:
-            icon = "✓" if c.get("ready") else "✗"
-            _append(lines, [
+            block.append(
                 f"- `{c.get('name')}` ({_container_label(c)}) "
-                f"ready={c.get('ready')} restarts={c.get('restartCount')} {icon}",
-                f"  image: `{c.get('image', '')}`",
-            ])
+                f"ready={c.get('ready')} restarts={c.get('restartCount')} {_icon(c.get('ready'))}"
+            )
+            block.append(f"  image: `{c.get('image', '')}`")
             if c.get("resources"):
-                _append(lines, [f"  resources: {c['resources']}"])
+                block.append(f"  resources: {c['resources']}")
             for probe_kind in ("liveness", "readiness"):
                 if c.get(probe_kind):
-                    _append(lines, [f"  {probe_kind}: {c[probe_kind]}"])
+                    block.append(f"  {probe_kind}: {c[probe_kind]}")
+        _append(lines, block)
 
     init_containers = pod.get("init_containers", [])
     if init_containers:
-        _append(lines, ["", "**Init containers:**", ""])
-        for c in init_containers:
-            icon = "✓" if c.get("ready") else "✗"
-            _append(lines, [
-                f"- `{c.get('name')}` ({_container_label(c)}) ready={c.get('ready')} {icon}"
-            ])
+        _append(
+            lines,
+            [
+                "**Init containers:**",
+                *[
+                    f"- `{c.get('name')}` ({_container_label(c)}) ready={c.get('ready')} {_icon(c.get('ready'))}"
+                    for c in init_containers
+                ],
+            ],
+        )
 
     volumes = pod.get("volumes", [])
     if volumes:
-        _append(lines, ["", "**Volumes:**", ""])
+        block = ["**Volumes:**"]
         for v in volumes:
             mounts = f" → {', '.join(v['mounts'])}" if v.get("mounts") else ""
-            _append(lines, [f"- `{v['name']}`: {v['source']}{mounts}"])
+            block.append(f"- `{v['name']}`: {v['source']}{mounts}")
+        _append(lines, block)
 
 
 def _append_section_k8s_events(lines: list[str], context: dict) -> None:
-    events = context.get("k8s_events", [])
-    if not events:
-        return
-    _append(lines, ["## Kubernetes events", "```", *events, "```"])
+    _append_fenced(lines, "## Kubernetes events", context.get("k8s_events", []))
 
 
 def _append_section_k8s_resource_usage(lines: list[str], context: dict) -> None:
-    usage = context.get("k8s_resource_usage", [])
-    if not usage:
-        return
-    _append(lines, ["## Resource usage (metrics-server)", "```", *usage, "```"])
+    _append_fenced(lines, "## Resource usage (metrics-server)", context.get("k8s_resource_usage", []))
+
+
+# Sections rendered after the header and the executive summary, in report
+# order. Every section takes ``(lines, context)`` and appends nothing when its
+# data is absent. Add a new section here (and to scripts/generate_examples.py).
+_SECTIONS = (
+    _append_section_plan_containers,
+    _append_section_network,
+    _append_section_ss_connections,
+    _append_section_firewall_rules,
+    _append_section_log_files,
+    _append_section_processes,
+    _append_section_systemd,
+    _append_section_env,
+    _append_section_health_commands,
+    # Background sections: collected for every incident, not plan-driven.
+    _append_section_snap,
+    _append_section_snap_list,
+    _append_section_journal,
+    _append_section_k8s_pod,
+    _append_section_k8s_previous_logs,
+    _append_section_k8s_events,
+    _append_section_k8s_resource_usage,
+    _append_section_charm_config,
+    _append_section_charm_actions,
+    _append_section_charm_metadata,
+    _append_section_disk,
+    _append_section_memory,
+    _append_section_logs,
+)

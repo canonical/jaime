@@ -37,6 +37,7 @@ class TestWriteEvent:
 
     def test_uses_default_path_when_empty(self, tmp_path, monkeypatch):
         import jaime.logging as jlog
+
         default = str(tmp_path / "events.jsonl")
         monkeypatch.setattr(jlog, "_DEFAULT_AUDIT_LOG_PATH", default)
         write_event({"event": "default-path-test"}, "")
@@ -85,12 +86,22 @@ class TestListIncidents:
         path = str(tmp_path / "events.jsonl")
         _write(
             path,
-            {"event": "incident-start", "unit": "postgresql/0", "workload": "blocked",
-             "first_seen": "t1", "status_since": "t0", "incident_id": "i1",
-             "timestamp": "2026-07-14T09:39:39+00:00"},
-            {"event": "report-generated", "unit": "postgresql/0",
-             "incident_id": "i1", "report_path": "/r/i1.md",
-             "timestamp": "2026-07-14T09:40:00+00:00"},
+            {
+                "event": "incident-start",
+                "unit": "postgresql/0",
+                "workload": "blocked",
+                "first_seen": "t1",
+                "status_since": "t0",
+                "incident_id": "i1",
+                "timestamp": "2026-07-14T09:39:39+00:00",
+            },
+            {
+                "event": "report-generated",
+                "unit": "postgresql/0",
+                "incident_id": "i1",
+                "report_path": "/r/i1.md",
+                "timestamp": "2026-07-14T09:40:00+00:00",
+            },
         )
         incidents = list_incidents(path)
         assert len(incidents) == 1
@@ -106,21 +117,22 @@ class TestListIncidents:
         path = str(tmp_path / "events.jsonl")
         _write(
             path,
-            {"event": "incident-start", "unit": "openbao/0", "incident_id": "i1",
-             "status_message": "Please initialize OpenBao or integrate with an auto-unseal provider",
-             "timestamp": "2026-07-14T09:39:39+00:00"},
+            {
+                "event": "incident-start",
+                "unit": "openbao/0",
+                "incident_id": "i1",
+                "status_message": "Please initialize OpenBao or integrate with an auto-unseal provider",
+                "timestamp": "2026-07-14T09:39:39+00:00",
+            },
         )
         incidents = list_incidents(path)
-        assert incidents[0]["status_message"] == (
-            "Please initialize OpenBao or integrate with an auto-unseal provider"
-        )
+        assert incidents[0]["status_message"] == ("Please initialize OpenBao or integrate with an auto-unseal provider")
 
     def test_status_message_defaults_empty_for_old_lines(self, tmp_path):
         path = str(tmp_path / "events.jsonl")
         _write(
             path,
-            {"event": "incident-start", "unit": "a/0", "incident_id": "i1",
-             "timestamp": "2026-07-14T09:39:39+00:00"},
+            {"event": "incident-start", "unit": "a/0", "incident_id": "i1", "timestamp": "2026-07-14T09:39:39+00:00"},
         )
         incidents = list_incidents(path)
         assert incidents[0]["status_message"] == ""
@@ -129,13 +141,15 @@ class TestListIncidents:
         path = str(tmp_path / "events.jsonl")
         _write(
             path,
-            {"event": "incident-start", "unit": "a/0", "incident_id": "old",
-             "timestamp": "2026-07-13T00:00:00+00:00"},
-            {"event": "incident-start", "unit": "b/0", "incident_id": "new",
-             "timestamp": "2026-07-14T00:00:00+00:00"},
-            {"event": "incident-closed", "unit": "a/0", "incident_id": "old",
-             "closed_at": "2026-07-13T01:00:00+00:00",
-             "timestamp": "2026-07-13T01:00:00+00:00"},
+            {"event": "incident-start", "unit": "a/0", "incident_id": "old", "timestamp": "2026-07-13T00:00:00+00:00"},
+            {"event": "incident-start", "unit": "b/0", "incident_id": "new", "timestamp": "2026-07-14T00:00:00+00:00"},
+            {
+                "event": "incident-closed",
+                "unit": "a/0",
+                "incident_id": "old",
+                "closed_at": "2026-07-13T01:00:00+00:00",
+                "timestamp": "2026-07-13T01:00:00+00:00",
+            },
         )
         incidents = list_incidents(path)
         # newest (by opened_at) first
@@ -149,10 +163,8 @@ class TestListIncidents:
         path = str(tmp_path / "events.jsonl")
         _write(
             path,
-            {"event": "incident-start", "unit": "a/0", "incident_id": "i1",
-             "timestamp": "2026-07-14T00:00:00+00:00"},
-            {"event": "incident-start", "unit": "b/0", "incident_id": "i2",
-             "timestamp": "2026-07-14T00:00:00+00:00"},
+            {"event": "incident-start", "unit": "a/0", "incident_id": "i1", "timestamp": "2026-07-14T00:00:00+00:00"},
+            {"event": "incident-start", "unit": "b/0", "incident_id": "i2", "timestamp": "2026-07-14T00:00:00+00:00"},
         )
         incidents = list_incidents(path, unit="b/0")
         assert [r["incident_id"] for r in incidents] == ["i2"]
@@ -161,9 +173,17 @@ class TestListIncidents:
         path = str(tmp_path / "events.jsonl")
         with open(path, "w") as f:
             f.write("{not json}\n")
-            f.write(json.dumps({"event": "incident-start", "unit": "a/0",
-                                "incident_id": "i1",
-                                "timestamp": "2026-07-14T00:00:00+00:00"}) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "event": "incident-start",
+                        "unit": "a/0",
+                        "incident_id": "i1",
+                        "timestamp": "2026-07-14T00:00:00+00:00",
+                    }
+                )
+                + "\n"
+            )
         incidents = list_incidents(path)
         assert len(incidents) == 1
         assert incidents[0]["incident_id"] == "i1"

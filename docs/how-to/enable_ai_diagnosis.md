@@ -33,6 +33,12 @@ juju config <application> mode=suggest provider=remote \
 Ollama it must be an exact pulled tag). `api-token` is optional: a local server
 that needs no authentication works without one.
 
+The report is sent as one prompt, and a small model can only read as much as its
+context window holds. If answers ignore the expected format (no command, invented
+actions), the prompt was probably cut off. With Ollama, raise the window, for
+example `OLLAMA_CONTEXT_LENGTH=16384` on the server, and check it with
+`ollama ps`. Run `get-suggestion force=true` to get a new answer.
+
 For development only, a plain token string is accepted:
 
 ```bash

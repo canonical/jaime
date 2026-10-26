@@ -24,15 +24,11 @@ def _generator():
 class TestExamplesAreCurrent:
     def test_report_matches_generator(self):
         committed = (_EXAMPLES / "report.md").read_text()
-        assert _generator().build_report() == committed, (
-            "examples/report.md is stale; run `make examples`"
-        )
+        assert _generator().build_report() == committed, "examples/report.md is stale; run `make examples`"
 
     def test_diagnostics_matches_generator(self):
         committed = (_EXAMPLES / "diagnostics.json").read_text()
-        assert _generator().build_diagnostics() == committed, (
-            "examples/diagnostics.json is stale; run `make examples`"
-        )
+        assert _generator().build_diagnostics() == committed, "examples/diagnostics.json is stale; run `make examples`"
 
     def test_example_exercises_key_sections(self):
         report = (_EXAMPLES / "report.md").read_text()

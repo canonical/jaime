@@ -30,21 +30,24 @@ _MACHINE_STATUS = {
                 "ubuntu/0": {
                     "machine": "0",
                     "workload-status": {
-                        "status": "active", "info": "",
+                        "status": "active",
+                        "info": "",
                         "since": "2026-09-23T12:45:01Z",
                     },
                     "subordinates": {
                         "jaime/0": {
                             "machine": "",
                             "workload-status": {
-                                "status": "active", "info": "Ready",
+                                "status": "active",
+                                "info": "Ready",
                                 "since": "2026-09-23T12:54:20Z",
                             },
                         },
                         "logrotated/0": {
                             "machine": "",
                             "workload-status": {
-                                "status": "blocked", "info": "broken",
+                                "status": "blocked",
+                                "info": "broken",
                                 "since": "2026-09-23T18:17:01Z",
                             },
                         },
@@ -57,7 +60,8 @@ _MACHINE_STATUS = {
                 "postgresql/0": {
                     "machine": "1",
                     "workload-status": {
-                        "status": "active", "info": "",
+                        "status": "active",
+                        "info": "",
                         "since": "2026-09-23T13:00:00Z",
                     },
                 },
@@ -123,7 +127,7 @@ class TestPrerequisite:
                 "juju-api-password": "pw",
             },
         )
-        with mock.patch("charm.agent_conf_path", return_value=None):
+        with mock.patch("jaime.core.agent_conf_path", return_value=None):
             assert h.charm._prerequisite_error() is None
 
     def test_rejected_credentials_block(self, tmp_path):
@@ -138,11 +142,18 @@ class TestPrerequisite:
             },
         )
         cm, _ = _mock_client(login_error=ControllerAuthError("nope"))
-        with mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
-             mock.patch("charm.parse_agent_conf", return_value={
-                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
-             }), \
-             mock.patch("charm.JujuControllerClient", return_value=cm):
+        with (
+            mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"),
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={
+                    "api_address": "10.0.0.1:17070",
+                    "ca_cert": "CERT",
+                    "model_uuid": "uuid",
+                },
+            ),
+            mock.patch("jaime.core.JujuControllerClient", return_value=cm),
+        ):
             err = h.charm._prerequisite_error()
         assert err == "juju-api credentials rejected by controller"
 
@@ -151,18 +162,29 @@ class TestCoLocatedFiltering:
     def _fetch(self, h, watch, machine="0", status=_MACHINE_STATUS):
         h.update_config({"watch-applications": watch})
         cm, _ = _mock_client(status=status)
-        with mock.patch.object(JaimeCharm, "_machine_id", return_value=machine), \
-             mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
-             mock.patch("charm.parse_agent_conf", return_value={
-                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
-             }), \
-             mock.patch("charm.JujuControllerClient", return_value=cm):
+        with (
+            mock.patch.object(JaimeCharm, "_machine_id", return_value=machine),
+            mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"),
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={
+                    "api_address": "10.0.0.1:17070",
+                    "ca_cert": "CERT",
+                    "model_uuid": "uuid",
+                },
+            ),
+            mock.patch("jaime.core.JujuControllerClient", return_value=cm),
+        ):
             return h.charm._fetch_co_located_statuses()
 
     def test_named_app_filtering_excludes_principal_and_self(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         statuses, other = self._fetch(h, "logrotated")
         assert set(statuses) == {"logrotated/0"}
         assert statuses["logrotated/0"]["status"] == "blocked"
@@ -170,52 +192,80 @@ class TestCoLocatedFiltering:
         assert other == []
 
     def test_star_selects_every_co_located_unit(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         statuses, _ = self._fetch(h, "*")
         # ubuntu/0 (principal) and jaime/0 (self) excluded; postgresql/0 is on
         # machine 1, so the host filter drops it.
         assert set(statuses) == {"logrotated/0"}
 
     def test_host_filter_drops_other_machines(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         statuses, _ = self._fetch(h, "*", machine="1")
         assert set(statuses) == {"postgresql/0"}
 
     def test_named_app_not_on_this_host_yields_nothing(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         statuses, _ = self._fetch(h, "postgresql")
         assert statuses == {}
 
     def test_unknown_machine_id_fails_closed(self, tmp_path):
         from jaime.controller import ControllerError
 
-        h = make_harness(tmp_path, {
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         cm, _ = _mock_client()
-        with mock.patch.object(JaimeCharm, "_machine_id", return_value=None), \
-             mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
-             mock.patch("charm.parse_agent_conf", return_value={
-                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
-             }), \
-             mock.patch("charm.JujuControllerClient", return_value=cm):
+        with (
+            mock.patch.object(JaimeCharm, "_machine_id", return_value=None),
+            mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"),
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={
+                    "api_address": "10.0.0.1:17070",
+                    "ca_cert": "CERT",
+                    "model_uuid": "uuid",
+                },
+            ),
+            mock.patch("jaime.core.JujuControllerClient", return_value=cm),
+        ):
             with mock.patch("charm.extract_unit_statuses") as extract:
                 import pytest
+
                 with pytest.raises(ControllerError):
                     h.charm._fetch_co_located_statuses()
             # Never even reaches unit extraction, so no remote unit is reported.
             extract.assert_not_called()
 
     def test_other_jaime_units_detected(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         # A second principal on the same machine with its own Jaime unit.
         # This unit is jaime/0, so jaime/1 is the "other".
         status = {
@@ -251,13 +301,20 @@ class TestCoLocatedFiltering:
             },
         }
         cm, _ = _mock_client(status=status)
-        with mock.patch.object(JaimeCharm, "_machine_id", return_value="0"), \
-             mock.patch.object(JaimeCharm, "_watch_applications", return_value=["*"]), \
-             mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
-             mock.patch("charm.parse_agent_conf", return_value={
-                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
-             }), \
-             mock.patch("charm.JujuControllerClient", return_value=cm):
+        with (
+            mock.patch.object(JaimeCharm, "_machine_id", return_value="0"),
+            mock.patch.object(JaimeCharm, "_watch_applications", return_value=["*"]),
+            mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"),
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={
+                    "api_address": "10.0.0.1:17070",
+                    "ca_cert": "CERT",
+                    "model_uuid": "uuid",
+                },
+            ),
+            mock.patch("jaime.core.JujuControllerClient", return_value=cm),
+        ):
             statuses, other = h.charm._fetch_co_located_statuses()
         assert other == ["jaime/1"]
         # Both Jaime units are excluded from the monitored set; the second
@@ -268,52 +325,68 @@ class TestCoLocatedFiltering:
 class TestUpdateStatus:
     def test_principal_always_watched_without_controller(self, tmp_path):
         h = make_harness(tmp_path)
-        with mock.patch.object(JaimeCharm, "_log_principal_status") as log_principal, \
-             mock.patch("charm.JujuControllerClient") as client:
+        with (
+            mock.patch.object(JaimeCharm, "_log_principal_status") as log_principal,
+            mock.patch("jaime.core.JujuControllerClient") as client,
+        ):
             h.charm._on_update_status(mock.MagicMock())
         log_principal.assert_called_once()
         client.assert_not_called()
 
     def test_no_controller_connection_when_watch_empty(self, tmp_path):
         h = make_harness(tmp_path)
-        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
-             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses") as fetch:
+        with (
+            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_fetch_co_located_statuses") as fetch,
+        ):
             h.charm._on_update_status(mock.MagicMock())
         fetch.assert_not_called()
 
     def test_co_located_units_are_processed(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "watch-applications": "logrotated",
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "watch-applications": "logrotated",
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         statuses = {
             "logrotated/0": {"status": "blocked", "since": "2026-09-23T18:17:01Z", "machine": "0"},
         }
-        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
-             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses",
-                               return_value=(statuses, [])), \
-             mock.patch.object(JaimeCharm, "_process_unit") as process:
+        with (
+            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=(statuses, [])),
+            mock.patch.object(JaimeCharm, "_process_unit") as process,
+        ):
             h.charm._on_update_status(mock.MagicMock())
         process.assert_called_once()
         assert process.call_args[0][0] == "logrotated/0"
 
     def test_missing_credentials_blocks_and_skips_fetch(self, tmp_path):
         h = make_harness(tmp_path, {"watch-applications": "logrotated"})
-        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
-             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses") as fetch:
+        with (
+            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_fetch_co_located_statuses") as fetch,
+        ):
             h.charm._on_update_status(mock.MagicMock())
         fetch.assert_not_called()
         assert isinstance(h.charm.unit.status, BlockedStatus)
 
     def test_other_jaime_units_reported_in_status(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "watch-applications": "*",
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "watch-applications": "*",
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         h.charm.unit.status = ActiveStatus("Ready")
-        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
-             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses",
-                               return_value=({}, ["jaime/0"])):
+        with (
+            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=({}, ["jaime/0"])),
+        ):
             h.charm._on_update_status(mock.MagicMock())
         assert isinstance(h.charm.unit.status, ActiveStatus)
         assert "other Jaime unit" in h.charm.unit.status.message
@@ -341,29 +414,39 @@ class TestMonitoredApplications:
         assert h.charm._monitored_applications() == ["ubuntu"]
 
     def test_co_located_apps_added_to_monitored_set(self, tmp_path):
-        h = make_harness(tmp_path, {
-            "watch-applications": "logrotated",
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
+        h = make_harness(
+            tmp_path,
+            {
+                "watch-applications": "logrotated",
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
         statuses = {"logrotated/0": {"status": "active", "since": "2026-01-01T00:00:00Z"}}
-        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
-             mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None), \
-             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses",
-                               return_value=(statuses, [])):
+        with (
+            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None),
+            mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=(statuses, [])),
+        ):
             h.charm._on_update_status(mock.MagicMock())
         assert h.charm._monitored_applications() == ["ubuntu", "logrotated"]
         assert h.charm.unit.status.message == "Ready: monitoring ubuntu, logrotated"
 
     def test_unresolved_configured_app_absent(self, tmp_path):
         """A configured app with no co-located unit is not named."""
-        h = make_harness(tmp_path, {
-            "watch-applications": "ghost",
-            "juju-api-user": "observer", "juju-api-password": "pw",
-        })
-        with mock.patch.object(JaimeCharm, "_log_principal_status"), \
-             mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None), \
-             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses",
-                               return_value=({}, [])):
+        h = make_harness(
+            tmp_path,
+            {
+                "watch-applications": "ghost",
+                "juju-api-user": "observer",
+                "juju-api-password": "pw",
+            },
+        )
+        with (
+            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None),
+            mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=({}, [])),
+        ):
             h.charm._on_update_status(mock.MagicMock())
         assert h.charm._monitored_applications() == ["ubuntu"]
 
@@ -386,17 +469,25 @@ class TestPrincipalStatusMessages:
 
     def _messages(self, h, status=None):
         cm, _ = _mock_client(status=status or _MACHINE_STATUS)
-        with mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
-             mock.patch("charm.parse_agent_conf", return_value={
-                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
-             }), \
-             mock.patch("charm.JujuControllerClient", return_value=cm):
+        with (
+            mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"),
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={
+                    "api_address": "10.0.0.1:17070",
+                    "ca_cert": "CERT",
+                    "model_uuid": "uuid",
+                },
+            ),
+            mock.patch("jaime.core.JujuControllerClient", return_value=cm),
+        ):
             return h.charm._principal_status_messages()
 
     def test_empty_message_omitted(self, tmp_path):
         """Active units with an empty message yield no entry (caller defaults to '')."""
         h = make_harness(
-            tmp_path, with_principal=True,
+            tmp_path,
+            with_principal=True,
             config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
         )
         messages = self._messages(h)
@@ -420,13 +511,12 @@ class TestPrincipalStatusMessages:
             },
         }
         h = make_harness(
-            tmp_path, with_principal=True,
+            tmp_path,
+            with_principal=True,
             config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
         )
         messages = self._messages(h, status=status)
-        assert messages == {
-            "ubuntu/0": "Please initialize OpenBao or integrate with an auto-unseal provider"
-        }
+        assert messages == {"ubuntu/0": "Please initialize OpenBao or integrate with an auto-unseal provider"}
 
     def test_empty_without_credentials(self, tmp_path):
         h = make_harness(tmp_path, with_principal=True)
@@ -436,16 +526,24 @@ class TestPrincipalStatusMessages:
         from jaime.controller import ControllerError
 
         h = make_harness(
-            tmp_path, with_principal=True,
+            tmp_path,
+            with_principal=True,
             config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
         )
         cm, _ = _mock_client(status=None)
         cm.full_status.side_effect = ControllerError("boom")
-        with mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
-             mock.patch("charm.parse_agent_conf", return_value={
-                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
-             }), \
-             mock.patch("charm.JujuControllerClient", return_value=cm):
+        with (
+            mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"),
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={
+                    "api_address": "10.0.0.1:17070",
+                    "ca_cert": "CERT",
+                    "model_uuid": "uuid",
+                },
+            ),
+            mock.patch("jaime.core.JujuControllerClient", return_value=cm),
+        ):
             assert h.charm._principal_status_messages() == {}
 
     def test_message_reaches_process_unit(self, tmp_path):
@@ -469,7 +567,8 @@ class TestPrincipalStatusMessages:
             },
         }
         h = make_harness(
-            tmp_path, with_principal=True,
+            tmp_path,
+            with_principal=True,
             config_overrides={"juju-api-user": "observer", "juju-api-password": "pw"},
         )
         cm, _ = _mock_client(status=status)
@@ -478,16 +577,54 @@ class TestPrincipalStatusMessages:
         unit.status = "blocked"
         unit.since = datetime.datetime(2026, 9, 23, 18, 17, 1, tzinfo=datetime.timezone.utc)
         gs.relations = {"principal": {"ubuntu/0": unit}}
-        with mock.patch("charm.agent_conf_path", return_value="/tmp/agent.conf"), \
-             mock.patch("charm.parse_agent_conf", return_value={
-                 "api_address": "10.0.0.1:17070", "ca_cert": "CERT", "model_uuid": "uuid",
-             }), \
-             mock.patch("charm.JujuControllerClient", return_value=cm), \
-             mock.patch("charm.goal_state", return_value=gs), \
-             mock.patch.object(JaimeCharm, "_process_unit") as process:
+        with (
+            mock.patch("jaime.core.agent_conf_path", return_value="/tmp/agent.conf"),
+            mock.patch(
+                "jaime.core.parse_agent_conf",
+                return_value={
+                    "api_address": "10.0.0.1:17070",
+                    "ca_cert": "CERT",
+                    "model_uuid": "uuid",
+                },
+            ),
+            mock.patch("jaime.core.JujuControllerClient", return_value=cm),
+            mock.patch("charm.goal_state", return_value=gs),
+            mock.patch.object(JaimeCharm, "_process_unit") as process,
+        ):
             h.charm._log_principal_status()
         assert process.called
         args = process.call_args[0]
         assert args[0] == "ubuntu/0"
         assert args[1] == "blocked"
         assert args[3] == "Please initialize OpenBao or integrate with an auto-unseal provider"
+
+
+class TestPrincipalControllerDetails:
+    """The report context carries the principal's charm details and live config."""
+
+    def test_adds_metadata_and_config_from_the_controller(self, tmp_path):
+        h = make_harness(tmp_path)
+        client = mock.MagicMock()
+        client.full_status.return_value = _MACHINE_STATUS
+        client.application_get.return_value = {"config": {"port": {"value": 1, "default": 2, "source": "user"}}}
+        session = mock.MagicMock()
+        session.__enter__.return_value = client
+        context = {}
+        with mock.patch.object(h.charm, "_controller_session", return_value=session):
+            h.charm._add_principal_controller_details(context)
+        assert context["juju_config"] == {"port": {"value": 1, "default": 2, "source": "user"}}
+        assert "app_metadata" in context
+        client.application_get.assert_called_once_with("ubuntu")
+
+    def test_leaves_the_context_alone_without_credentials(self, tmp_path):
+        h = make_harness(tmp_path)
+        context = {}
+        h.charm._add_principal_controller_details(context)
+        assert context["juju_config"] == {}
+        assert context["app_metadata"] == {}
+
+    def test_no_principal_adds_nothing(self, tmp_path):
+        h = make_harness(tmp_path, with_principal=False)
+        context = {}
+        h.charm._add_principal_controller_details(context)
+        assert context == {}

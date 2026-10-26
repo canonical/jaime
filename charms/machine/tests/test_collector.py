@@ -35,26 +35,44 @@ def _make_tracing_payload(events: list[tuple[str, str, str]], ts_ns: int) -> byt
     """Build a minimal OTLP JSON payload for testing."""
     evt_list = []
     for name, kind, exc_type in events:
-        evt_list.append({
-            "name": name,
-            "timeUnixNano": str(ts_ns),
-            "attributes": [{"key": "kind", "value": {"stringValue": kind}}],
-        })
-        if exc_type:
-            evt_list.append({
-                "name": "exception",
+        evt_list.append(
+            {
+                "name": name,
                 "timeUnixNano": str(ts_ns),
-                "attributes": [
-                    {"key": "exception.type", "value": {"stringValue": exc_type}},
-                    {"key": "exception.message", "value": {"stringValue": "test error"}},
-                ],
-            })
-    payload = {"resourceSpans": [{"scopeSpans": [{"scope": {"name": "ops"}, "spans": [{
-        "name": "ops.main",
-        "startTimeUnixNano": str(ts_ns),
-        "events": evt_list,
-    }]}]}]}
+                "attributes": [{"key": "kind", "value": {"stringValue": kind}}],
+            }
+        )
+        if exc_type:
+            evt_list.append(
+                {
+                    "name": "exception",
+                    "timeUnixNano": str(ts_ns),
+                    "attributes": [
+                        {"key": "exception.type", "value": {"stringValue": exc_type}},
+                        {"key": "exception.message", "value": {"stringValue": "test error"}},
+                    ],
+                }
+            )
+    payload = {
+        "resourceSpans": [
+            {
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "ops"},
+                        "spans": [
+                            {
+                                "name": "ops.main",
+                                "startTimeUnixNano": str(ts_ns),
+                                "events": evt_list,
+                            }
+                        ],
+                    }
+                ]
+            }
+        ]
+    }
     return json.dumps(payload).encode()
+
 
 class TestTailLines:
     def test_returns_all_lines_when_under_limit(self):
@@ -79,6 +97,7 @@ class TestCollectUnitLogs:
             f"{now.strftime('%Y-%m-%d %H:%M:%S')} INFO recovered\n"
         )
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60)
         assert isinstance(result, list)
@@ -86,6 +105,7 @@ class TestCollectUnitLogs:
 
     def test_missing_log_returns_empty(self, tmp_path):
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("nonexistent/0")
         assert result == []
@@ -93,11 +113,10 @@ class TestCollectUnitLogs:
     def test_respects_max_lines(self, tmp_path):
         log_file = tmp_path / "unit-postgresql-0.log"
         now = datetime.datetime.now(datetime.timezone.utc)
-        lines = "\n".join(
-            f"{now.strftime('%Y-%m-%d %H:%M:%S')} INFO line {i}" for i in range(100)
-        )
+        lines = "\n".join(f"{now.strftime('%Y-%m-%d %H:%M:%S')} INFO line {i}" for i in range(100))
         log_file.write_text(lines + "\n")
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60, max_lines=10)
         assert len(result) <= 10
@@ -107,11 +126,9 @@ class TestCollectUnitLogs:
         old_ts = "2000-01-01 00:00:00"
         now = datetime.datetime.now(datetime.timezone.utc)
         recent_ts = now.strftime("%Y-%m-%d %H:%M:%S")
-        log_file.write_text(
-            f"{old_ts} ERROR old line\n"
-            f"{recent_ts} ERROR recent line\n"
-        )
+        log_file.write_text(f"{old_ts} ERROR old line\n{recent_ts} ERROR recent line\n")
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60)
         assert not any("old line" in line for line in result)
@@ -135,10 +152,13 @@ class TestCollectUnitLogs:
             f"{recent_ts} ERROR incident error\n"
         )
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs(
-                "postgresql/0", log_window_minutes=60,
-                from_time=from_time, buffer_minutes=5,
+                "postgresql/0",
+                log_window_minutes=60,
+                from_time=from_time,
+                buffer_minutes=5,
             )
         assert not any("pre-incident noise" in line for line in result)
         assert any("near incident start" in line for line in result)
@@ -154,10 +174,13 @@ class TestCollectUnitLogs:
         log_file.write_text(f"{ts_old} ERROR old line\n{ts_recent} ERROR recent line\n")
         from_time = now - datetime.timedelta(hours=2)
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs(
-                "postgresql/0", log_window_minutes=60,
-                from_time=from_time, buffer_minutes=5,
+                "postgresql/0",
+                log_window_minutes=60,
+                from_time=from_time,
+                buffer_minutes=5,
             )
         # Both lines are within from_time - buffer (2h5m ago), so both are included
         assert any("old line" in line for line in result)
@@ -176,6 +199,7 @@ class TestCollectUnitLogs:
             f"{ts} INFO awaiting error resolution\n"
         )
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60, context_window=0)
         # ERROR and WARNING lines should be included
@@ -192,11 +216,9 @@ class TestCollectUnitLogs:
         log_file = tmp_path / "unit-postgresql-0.log"
         now = datetime.datetime.now(datetime.timezone.utc)
         ts = now.strftime("%Y-%m-%d %H:%M:%S")
-        log_file.write_text(
-            f"{ts} INFO line one\n"
-            f"{ts} INFO line two\n"
-        )
+        log_file.write_text(f"{ts} INFO line one\n{ts} INFO line two\n")
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60)
         assert any("line one" in line for line in result)
@@ -238,17 +260,18 @@ class TestCollectUnitLogs:
             lines.append(f"{ts} {level} {msg}")
         log_file.write_text("\n".join(lines) + "\n")
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60, context_window=3)
         # The ERROR at index 15 should be included
         assert any("connection to database lost" in line for line in result)
         # Context window around index 15: indices 12-18
-        assert any("relation joined postgresql" in line for line in result)   # 12
+        assert any("relation joined postgresql" in line for line in result)  # 12
         assert any("querying application status" in line for line in result)  # 13
-        assert any("processing pending events" in line for line in result)    # 14
-        assert any("retrying failed hook" in line for line in result)         # 16
+        assert any("processing pending events" in line for line in result)  # 14
+        assert any("retrying failed hook" in line for line in result)  # 16
         # Line at index 11 (outside context_window) should not be included
-        assert not any("checking relation data" in line for line in result)   # 11
+        assert not any("checking relation data" in line for line in result)  # 11
 
     def test_context_window_does_not_exceed_bounds(self, tmp_path):
         """Context window at the start/end of recent lines doesn't go out of bounds."""
@@ -256,11 +279,9 @@ class TestCollectUnitLogs:
         now = datetime.datetime.now(datetime.timezone.utc)
         ts0 = (now - datetime.timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
         ts1 = now.strftime("%Y-%m-%d %H:%M:%S")
-        log_file.write_text(
-            f"{ts0} WARNING first line\n"
-            f"{ts1} ERROR last line\n"
-        )
+        log_file.write_text(f"{ts0} WARNING first line\n{ts1} ERROR last line\n")
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60, context_window=5)
         # Both lines should be included (context window at the edges)
@@ -272,11 +293,9 @@ class TestCollectUnitLogs:
         now = datetime.datetime.now(datetime.timezone.utc)
         old_ts = (now - datetime.timedelta(minutes=120)).strftime("%Y-%m-%d %H:%M:%S")
         recent_ts = now.strftime("%Y-%m-%d %H:%M:%S")
-        log_file.write_text(
-            f"{old_ts} ERROR old rolling line\n"
-            f"{recent_ts} ERROR new rolling line\n"
-        )
+        log_file.write_text(f"{old_ts} ERROR old rolling line\n{recent_ts} ERROR new rolling line\n")
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = collect_unit_logs("postgresql/0", log_window_minutes=60)
         assert not any("old rolling line" in line for line in result)
@@ -314,11 +333,13 @@ class TestCollectMemorySummary:
 
 class TestCollectContext:
     def test_returns_all_sections(self):
-        with _no_background_io(), \
-             mock.patch("jaime.collector.collect_unit_logs", return_value=["log line"]), \
-             mock.patch("jaime.collector.collect_systemd_failed", return_value=[]), \
-             mock.patch("jaime.collector.collect_disk_usage", return_value=["disk line"]), \
-             mock.patch("jaime.collector.collect_memory_summary", return_value=["mem line"]):
+        with (
+            _no_background_io(),
+            mock.patch("jaime.collector.collect_unit_logs", return_value=["log line"]),
+            mock.patch("jaime.collector.collect_systemd_failed", return_value=[]),
+            mock.patch("jaime.collector.collect_disk_usage", return_value=["disk line"]),
+            mock.patch("jaime.collector.collect_memory_summary", return_value=["mem line"]),
+        ):
             ctx = collect_context("postgresql/0")
         assert "unit_logs" in ctx
         assert "systemd_failed" in ctx
@@ -330,11 +351,13 @@ class TestCollectContext:
         assert "collected_at" in ctx
 
     def test_collected_at_is_utc_iso(self):
-        with _no_background_io(), \
-             mock.patch("jaime.collector.collect_unit_logs", return_value=[]), \
-             mock.patch("jaime.collector.collect_systemd_failed", return_value=[]), \
-             mock.patch("jaime.collector.collect_disk_usage", return_value=[]), \
-             mock.patch("jaime.collector.collect_memory_summary", return_value=[]):
+        with (
+            _no_background_io(),
+            mock.patch("jaime.collector.collect_unit_logs", return_value=[]),
+            mock.patch("jaime.collector.collect_systemd_failed", return_value=[]),
+            mock.patch("jaime.collector.collect_disk_usage", return_value=[]),
+            mock.patch("jaime.collector.collect_memory_summary", return_value=[]),
+        ):
             ctx = collect_context("postgresql/0")
         assert "+00:00" in ctx["collected_at"] or ctx["collected_at"].endswith("Z")
 
@@ -346,20 +369,21 @@ class TestCollectContext:
         contents = {
             "/var/lib/juju/agents/unit-postgresql-0/charm/config.yaml": config_yaml,
         }
-        with \
-             mock.patch("jaime.collector.collect_snap_context", return_value={}), \
-             mock.patch("jaime.collector.collect_snap_list", return_value=[]), \
-             mock.patch("jaime.collector.collect_journal_errors", return_value=[]), \
-             mock.patch("jaime.collector._journal_units", return_value=[]), \
-             mock.patch("jaime.collector.collect_ss_connections", return_value=[]), \
-             mock.patch("jaime.collector.collect_firewall_rules", return_value={}), \
-             mock.patch("jaime.collector._collect_systemd_failed_detail", return_value=[]), \
-             mock.patch("jaime.collector.collect_unit_logs", return_value=[]), \
-             mock.patch("jaime.collector.collect_systemd_failed", return_value=[]), \
-             mock.patch("jaime.collector.collect_disk_usage", return_value=[]), \
-             mock.patch("jaime.collector.collect_memory_summary", return_value=[]), \
-             mock.patch("jaime.collector.collect_tracing_events", return_value=[]), \
-             mock.patch("builtins.open", mock.mock_open()) as m:
+        with (
+            mock.patch("jaime.collector.collect_snap_context", return_value={}),
+            mock.patch("jaime.collector.collect_snap_list", return_value=[]),
+            mock.patch("jaime.collector.collect_journal_errors", return_value=[]),
+            mock.patch("jaime.collector._journal_units", return_value=[]),
+            mock.patch("jaime.collector.collect_ss_connections", return_value=[]),
+            mock.patch("jaime.collector.collect_firewall_rules", return_value={}),
+            mock.patch("jaime.collector._collect_systemd_failed_detail", return_value=[]),
+            mock.patch("jaime.collector.collect_unit_logs", return_value=[]),
+            mock.patch("jaime.collector.collect_systemd_failed", return_value=[]),
+            mock.patch("jaime.collector.collect_disk_usage", return_value=[]),
+            mock.patch("jaime.collector.collect_memory_summary", return_value=[]),
+            mock.patch("jaime.collector.collect_tracing_events", return_value=[]),
+            mock.patch("builtins.open", mock.mock_open()) as m,
+        ):
             m.side_effect = lambda p, *a, **kw: mock.mock_open(read_data=contents.get(p, ""))()
             ctx = collect_context("postgresql/0")
         assert ctx["charm_config"]["config_yaml"].startswith("options:")
@@ -377,6 +401,7 @@ class TestCollectCharmConfig:
             "/var/lib/juju/agents/unit-postgresql-0/charm/metadata.yaml": metadata_yaml,
         }
         import jaime.collector as jcollector
+
         with mock.patch("builtins.open", mock.mock_open()) as m:
             m.side_effect = lambda p, *a, **kw: mock.mock_open(read_data=contents.get(p, ""))()
             result = jcollector.collect_charm_config("postgresql/0")
@@ -386,6 +411,7 @@ class TestCollectCharmConfig:
 
     def test_missing_files_returns_empty(self):
         import jaime.collector as jcollector
+
         result = jcollector.collect_charm_config("nonexistent/0")
         assert result["config_yaml"] == ""
         assert result["actions_yaml"] == ""
@@ -394,6 +420,7 @@ class TestCollectCharmConfig:
     def test_large_config_preserves_top_level_options(self):
         """A config.yaml larger than the old 200-line cap must not be tailed."""
         import jaime.collector as jcollector
+
         lines = ["options:"]
         for i in range(250):
             lines.append(f"  option-{i}:\n    type: string\n    default: value-{i}")
@@ -409,6 +436,7 @@ class TestCollectCharmConfig:
 
     def test_over_byte_cap_returns_empty(self):
         import jaime.collector as jcollector
+
         contents = {
             "/var/lib/juju/agents/unit-postgresql-0/charm/config.yaml": "x" * 100,
         }
@@ -421,9 +449,12 @@ class TestCollectCharmConfig:
 class TestCollectTracingEvents:
     def _make_db(self, tmp_path, rows: list) -> str:
         import sqlite3 as _sq
+
         db_path = str(tmp_path / ".tracing-data.db")
         conn = _sq.connect(db_path)
-        conn.execute("CREATE TABLE tracing (id INTEGER PRIMARY KEY AUTOINCREMENT, state INTEGER, data BLOB, content_type TEXT)")
+        conn.execute(
+            "CREATE TABLE tracing (id INTEGER PRIMARY KEY AUTOINCREMENT, state INTEGER, data BLOB, content_type TEXT)"
+        )
         for data in rows:
             conn.execute("INSERT INTO tracing (state, data, content_type) VALUES (50, ?, 'application/json')", (data,))
         conn.commit()
@@ -435,7 +466,9 @@ class TestCollectTracingEvents:
 
     def test_returns_events_from_db(self, tmp_path):
         ts_ns = int(datetime.datetime(2026, 7, 14, 10, 0, 0, tzinfo=datetime.timezone.utc).timestamp() * 1e9)
-        data = _make_tracing_payload([("RelationBrokenEvent", "relation_broken", ""), ("ConfigChangedEvent", "config_changed", "")], ts_ns)
+        data = _make_tracing_payload(
+            [("RelationBrokenEvent", "relation_broken", ""), ("ConfigChangedEvent", "config_changed", "")], ts_ns
+        )
         db_path = self._make_db(tmp_path, [data])
         with mock.patch("jaime.collector.sqlite3.connect", return_value=__import__("sqlite3").connect(db_path)):
             result = collect_tracing_events("postgresql/0")
@@ -470,22 +503,25 @@ class TestCollectTracingEvents:
 
     def test_skips_commit_events(self, tmp_path):
         ts_ns = int(datetime.datetime(2026, 7, 14, 10, 0, 0, tzinfo=datetime.timezone.utc).timestamp() * 1e9)
-        data = _make_tracing_payload([
-            ("UpdateStatusEvent", "update_status", ""),
-            ("PreCommitEvent", "pre_commit", ""),
-            ("CommitEvent", "commit", ""),
-        ], ts_ns)
+        data = _make_tracing_payload(
+            [
+                ("UpdateStatusEvent", "update_status", ""),
+                ("PreCommitEvent", "pre_commit", ""),
+                ("CommitEvent", "commit", ""),
+            ],
+            ts_ns,
+        )
         db_path = self._make_db(tmp_path, [data])
         with mock.patch("jaime.collector.sqlite3.connect", return_value=__import__("sqlite3").connect(db_path)):
             result = collect_tracing_events("postgresql/0")
         assert not any(e["event"] in ("PreCommitEvent", "CommitEvent") for e in result)
-
 
     def test_available_file_returns_lines(self, tmp_path):
         log = tmp_path / "test.log"
         log.write_text("line1\nline2\nline3\n")
         plan_lf = [{"path": str(log), "priority": "high", "description": "test log"}]
         import jaime.collector as jcollector
+
         with mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)):
             result = jcollector._collect_log_files(plan_lf, 100)
         assert len(result) == 1
@@ -505,34 +541,36 @@ class TestCollectTracingEvents:
 class TestCollectProcesses:
     def test_process_running(self):
         with mock.patch("jaime.collector._run", return_value="12345\n"):
-            result = jcollector._collect_processes([{"name": "nginx", "expected_min_count": 1, "expected_max_count": 2}])
+            result = jcollector._collect_processes(
+                [{"name": "nginx", "expected_min_count": 1, "expected_max_count": 2}]
+            )
         assert result[0]["status"] == "ok"
         assert result[0]["running_count"] == 1
 
     def test_too_few_processes(self):
         with mock.patch("jaime.collector._run", return_value=""):
-            result = jcollector._collect_processes([{"name": "nginx", "expected_min_count": 1, "expected_max_count": 2}])
+            result = jcollector._collect_processes(
+                [{"name": "nginx", "expected_min_count": 1, "expected_max_count": 2}]
+            )
         assert result[0]["status"] == "too_few"
         assert result[0]["running_count"] == 0
 
     def test_too_many_processes(self):
         with mock.patch("jaime.collector._run", return_value="12345\n12346\n12347\n"):
-            result = jcollector._collect_processes([{"name": "nginx", "expected_min_count": 1, "expected_max_count": 2}])
+            result = jcollector._collect_processes(
+                [{"name": "nginx", "expected_min_count": 1, "expected_max_count": 2}]
+            )
         assert result[0]["status"] == "too_many"
         assert result[0]["running_count"] == 3
 
 
 class TestCollectNetworkPorts:
     def test_port_listening(self):
-        result = jcollector._collect_network_ports(
-            [{"port": 5432, "protocol": "tcp"}], "tcp LISTEN 0 128 0.0.0.0:5432"
-        )
+        result = jcollector._collect_network_ports([{"port": 5432, "protocol": "tcp"}], "tcp LISTEN 0 128 0.0.0.0:5432")
         assert result[0]["status"] == "listening"
 
     def test_port_not_listening(self):
-        result = jcollector._collect_network_ports(
-            [{"port": 5432, "protocol": "tcp"}], "tcp LISTEN 0 128 0.0.0.0:80"
-        )
+        result = jcollector._collect_network_ports([{"port": 5432, "protocol": "tcp"}], "tcp LISTEN 0 128 0.0.0.0:80")
         assert result[0]["status"] == "not_listening"
 
     def test_port_no_false_positive_on_substring_match(self):
@@ -556,9 +594,11 @@ class TestCollectHealthCommands:
         mock_result.stdout = "active\n"
         mock_result.stderr = ""
         with mock.patch("jaime.collector.subprocess.run", return_value=mock_result):
-            result = jcollector._collect_health_commands([
-                {"command": "systemctl is-active postgresql", "timeout_seconds": 5},
-            ])
+            result = jcollector._collect_health_commands(
+                [
+                    {"command": "systemctl is-active postgresql", "timeout_seconds": 5},
+                ]
+            )
         assert len(result) == 1
         assert result[0]["returncode"] == 0
         assert result[0]["stdout"] == "active"
@@ -570,25 +610,33 @@ class TestCollectHealthCommands:
         mock_result.stdout = ""
         mock_result.stderr = "Unit not found"
         with mock.patch("jaime.collector.subprocess.run", return_value=mock_result):
-            result = jcollector._collect_health_commands([
-                {"command": "systemctl is-active nonexistent", "timeout_seconds": 5},
-            ])
+            result = jcollector._collect_health_commands(
+                [
+                    {"command": "systemctl is-active nonexistent", "timeout_seconds": 5},
+                ]
+            )
         assert result[0]["returncode"] == 3
         assert result[0]["stderr"] == "Unit not found"
 
     def test_command_times_out(self):
-        with mock.patch("jaime.collector.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("cmd", 5)):
-            result = jcollector._collect_health_commands([
-                {"command": "sleep 100", "timeout_seconds": 5},
-            ])
+        with mock.patch(
+            "jaime.collector.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("cmd", 5)
+        ):
+            result = jcollector._collect_health_commands(
+                [
+                    {"command": "sleep 100", "timeout_seconds": 5},
+                ]
+            )
         assert result[0]["returncode"] == -1
         assert "timed out" in result[0]["stderr"]
 
     def test_command_raises_exception(self):
         with mock.patch("jaime.collector.subprocess.run", side_effect=FileNotFoundError("no such binary")):
-            result = jcollector._collect_health_commands([
-                {"command": "nonexistent-binary", "timeout_seconds": 5},
-            ])
+            result = jcollector._collect_health_commands(
+                [
+                    {"command": "nonexistent-binary", "timeout_seconds": 5},
+                ]
+            )
         assert result[0]["returncode"] == -1
         assert "no such binary" in result[0]["stderr"]
 
@@ -626,12 +674,22 @@ class TestCollectContextWithPlan:
             "collect_disk_usage": mock.MagicMock(return_value=[]),
             "collect_memory_summary": mock.MagicMock(return_value=[]),
             "collect_systemd_failed": mock.MagicMock(return_value=[]),
-            "_collect_log_files": mock.MagicMock(return_value=[{"path": "/var/log/postgresql.log", "status": "available", "lines": ["log line"]}]),
+            "_collect_log_files": mock.MagicMock(
+                return_value=[{"path": "/var/log/postgresql.log", "status": "available", "lines": ["log line"]}]
+            ),
             "_collect_processes": mock.MagicMock(return_value=[{"name": "postgres", "status": "ok"}]),
             "_collect_systemd_units": mock.MagicMock(return_value=[{"unit": "postgresql.service", "status": "active"}]),
-            "_collect_network_ports": mock.MagicMock(return_value=[{"port": 5432, "protocol": "tcp", "status": "listening"}]),
-            "_collect_env_variables": mock.MagicMock(return_value=[{"name": "PGDATA", "value": "/var/lib/pg", "status": "set"}]),
-            "_collect_health_commands": mock.MagicMock(return_value=[{"command": "systemctl is-active postgresql", "returncode": 0, "stdout": "active", "stderr": ""}]),
+            "_collect_network_ports": mock.MagicMock(
+                return_value=[{"port": 5432, "protocol": "tcp", "status": "listening"}]
+            ),
+            "_collect_env_variables": mock.MagicMock(
+                return_value=[{"name": "PGDATA", "value": "/var/lib/pg", "status": "set"}]
+            ),
+            "_collect_health_commands": mock.MagicMock(
+                return_value=[
+                    {"command": "systemctl is-active postgresql", "returncode": 0, "stdout": "active", "stderr": ""}
+                ]
+            ),
         }
         with _no_background_io(), mock.patch.multiple("jaime.collector", **mocks):
             ctx = collect_context("postgresql/0", diagnostics_plan=plan)
@@ -691,6 +749,7 @@ class TestCollectContextWithPlan:
 class TestLineCaps:
     def test_cap_lines_truncates_a_pathological_line(self):
         from jaime.logutils import cap_lines
+
         huge = "x" * (10 * 1024)
         result = cap_lines([huge], 10)
         assert len(result) == 1
@@ -699,6 +758,7 @@ class TestLineCaps:
 
     def test_cap_lines_tail_bounds(self):
         from jaime.logutils import cap_lines
+
         assert cap_lines([str(i) for i in range(100)], 5) == ["95", "96", "97", "98", "99"]
 
 
@@ -707,8 +767,8 @@ class TestErrorWindow:
         lines = [f"line {i}" for i in range(30)] + ["ERROR boom"] + [f"after {i}" for i in range(15)]
         result = jcollector._error_window(lines, 10, 100)
         assert "ERROR boom" in result
-        assert "line 20" in result      # 10 before
-        assert "after 4" in result      # 10 after
+        assert "line 20" in result  # 10 before
+        assert "after 4" in result  # 10 after
         assert "line 19" not in result
 
     def test_falls_back_to_tail_without_error(self):
@@ -733,6 +793,7 @@ class TestSnapContext:
             if cmd[:2] == ["snap", "logs"]:
                 return logs
             return ""
+
         return fake_run
 
     def test_inactive_and_disabled_services_do_not_trigger(self):
@@ -742,17 +803,21 @@ class TestSnapContext:
             "lxd.daemon enabled active socket-activated\n"
             "vault.vaultd disabled inactive -\n"
         )
-        changes = "7 Done today today Auto-refresh snap \"lxd\"\n"
-        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run", side_effect=self._fake_run(services, changes)):
+        changes = '7 Done today today Auto-refresh snap "lxd"\n'
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
+            mock.patch("jaime.collector._run", side_effect=self._fake_run(services, changes)),
+        ):
             assert jcollector.collect_snap_context(100) == {}
 
     def test_unrelated_failed_change_does_not_trigger(self):
         """An auto-refresh failure for an unrelated snap is not the workload's fault."""
         services = "lxd.daemon enabled active -\n"
         changes = '432 Error today today Auto-refresh snap "firefox"\n'
-        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run", side_effect=self._fake_run(services, changes)):
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
+            mock.patch("jaime.collector._run", side_effect=self._fake_run(services, changes)),
+        ):
             assert jcollector.collect_snap_context(100) == {}
 
     def test_failed_service_yields_status_and_windowed_logs(self):
@@ -766,9 +831,10 @@ class TestSnapContext:
             "42 Error today today Start service charmed-postgresql.patroni\n"
         )
         logs = "\n".join([f"info {i}" for i in range(20)] + ["ERROR could not start"] + [f"tail {i}" for i in range(5)])
-        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run",
-                        side_effect=self._fake_run(services, changes, logs)):
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
+            mock.patch("jaime.collector._run", side_effect=self._fake_run(services, changes, logs)),
+        ):
             ctx = jcollector.collect_snap_context(100)
         assert ctx["failed_services"] == ["charmed-postgresql.patroni"]
         # Only the failing snap's change row survives the filter.
@@ -776,14 +842,14 @@ class TestSnapContext:
         # All services are shown as context, including disabled ones.
         assert any("vault.vaultd" in line for line in ctx["services"])
         # Logs are keyed by the failing service, not the snap.
-        assert any("ERROR could not start" in line
-                   for line in ctx["logs"]["charmed-postgresql.patroni"])
+        assert any("ERROR could not start" in line for line in ctx["logs"]["charmed-postgresql.patroni"])
 
     def test_failed_services_capped(self):
         services = "\n".join(f"s{i}.svc enabled failed -" for i in range(10)) + "\n"
-        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run",
-                        side_effect=self._fake_run(services, "", "ERROR boom")):
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
+            mock.patch("jaime.collector._run", side_effect=self._fake_run(services, "", "ERROR boom")),
+        ):
             ctx = jcollector.collect_snap_context(100)
         # At most _CAP_SNAP_SERVICES services get log fetches.
         assert len(ctx["logs"]) <= jcollector._CAP_SNAP_SERVICES
@@ -828,15 +894,20 @@ class TestBoundsOnPreviouslyUnbounded:
         assert len(result) == 7
 
     def test_plan_item_counts_capped(self):
-        plan = {"principal_name": "x", "monitoring_plan": {
-            "processes": [{"name": f"p{i}"} for i in range(100)],
-            "systemd_units": [f"u{i}.service" for i in range(100)],
-        }}
-        with _no_background_io(), \
-             mock.patch("jaime.collector._collect_processes", side_effect=lambda items: items), \
-             mock.patch("jaime.collector._collect_systemd_units", side_effect=lambda items: items), \
-             mock.patch("jaime.collector.collect_unit_logs", return_value=[]), \
-             mock.patch("jaime.collector.collect_systemd_failed", return_value=[]):
+        plan = {
+            "principal_name": "x",
+            "monitoring_plan": {
+                "processes": [{"name": f"p{i}"} for i in range(100)],
+                "systemd_units": [f"u{i}.service" for i in range(100)],
+            },
+        }
+        with (
+            _no_background_io(),
+            mock.patch("jaime.collector._collect_processes", side_effect=lambda items: items),
+            mock.patch("jaime.collector._collect_systemd_units", side_effect=lambda items: items),
+            mock.patch("jaime.collector.collect_unit_logs", return_value=[]),
+            mock.patch("jaime.collector.collect_systemd_failed", return_value=[]),
+        ):
             ctx = collect_context("x/0", diagnostics_plan=plan)
         assert len(ctx["plan_results"]["processes"]["items"]) == jcollector._PLAN_ITEM_CAPS["processes"]
         assert len(ctx["plan_results"]["systemd_units"]["items"]) == jcollector._PLAN_ITEM_CAPS["systemd_units"]
@@ -849,8 +920,10 @@ class TestCollectSnapList:
             "charmed-postgresql  16.4  123  16/stable  canonical  -\n"
             "core24  24.04  2124  latest/stable  canonical  base\n"
         )
-        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run", return_value=output):
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
+            mock.patch("jaime.collector._run", return_value=output),
+        ):
             result = jcollector.collect_snap_list()
         assert result == [
             "charmed-postgresql  16.4  123  16/stable  canonical  -",
@@ -865,12 +938,11 @@ class TestCollectSnapList:
 class TestJournalUnits:
     def test_union_of_plan_failed_and_snap(self):
         plan = {"monitoring_plan": {"systemd_units": ["postgresql", "vault.service"]}}
-        services_out = (
-            "Service  Startup  Current  Notes\n"
-            "charmed-postgresql.patroni  enabled  active  -\n"
-        )
-        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"), \
-             mock.patch("jaime.collector._run", return_value=services_out):
+        services_out = "Service  Startup  Current  Notes\ncharmed-postgresql.patroni  enabled  active  -\n"
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
+            mock.patch("jaime.collector._run", return_value=services_out),
+        ):
             units = jcollector._journal_units(plan, ["fail.service"])
         assert "postgresql.service" in units
         assert "vault.service" in units
@@ -882,10 +954,13 @@ class TestJournalUnits:
 class TestCollectJournalErrors:
     def test_builds_command_and_returns_lines(self):
         lines = "2026-10-17T15:29:11+00:00 host postgres[1699]: FATAL:  connection refused\n"
-        with mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/journalctl"), \
-             mock.patch("jaime.collector._run", return_value=lines) as m:
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/journalctl"),
+            mock.patch("jaime.collector._run", return_value=lines) as m,
+        ):
             result = jcollector.collect_journal_errors(
-                units=["postgresql.service"], from_time=None,
+                units=["postgresql.service"],
+                from_time=None,
             )
         assert result and "FATAL" in result[0]
         cmd = m.call_args[0][0]

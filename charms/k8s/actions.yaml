@@ -33,6 +33,31 @@ get-suggestion:
       type: string
       default: ""
       description: "Extra context to include in the AI prompt."
+    force:
+      type: boolean
+      default: false
+      description: "Call the AI provider again even when a suggestion for this context and model is already stored."
+ask:
+  description: "Append one conversational question to the current (or a given) incident and return a new AI answer as a turn. Never overwrites previous answers."
+  params:
+    incident-id:
+      type: string
+      default: ""
+      description: "Incident to ask about. Empty uses the single open incident; required when several are open, and to ask about a closed incident."
+    question:
+      type: string
+      description: "The question to ask about the incident (required)."
+list-suggestions:
+  description: "Return the full conversation (all turns) for an incident as a JSON array under 'result'."
+  params:
+    incident-id:
+      type: string
+      default: ""
+      description: "Incident ID to list turns for. Empty lists every tracked incident's turns."
+  results:
+    result:
+      type: string
+      description: "JSON array of turns: incident_id, unit, turn_id, question, generated_at, description."
 generate-report:
   description: "Generate and return a Markdown report for the current open incident."
   params: {}

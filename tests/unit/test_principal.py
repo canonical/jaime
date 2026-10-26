@@ -217,8 +217,7 @@ class TestPersistence:
         t = StatusTracker(state_path=path)
         t.observe("postgresql/0", "blocked", SINCE_A)
         t.record_reported("postgresql/0", TS_1, INCIDENT_1)
-        t.record_usage("postgresql/0", {"incident_id": "x", "timestamp": TS_1,
-                                        "total_tokens": 10})
+        t.record_usage("postgresql/0", {"incident_id": "x", "timestamp": TS_1, "total_tokens": 10})
 
         t.reset()
 
@@ -228,3 +227,34 @@ class TestPersistence:
         # Persisted empty state survives a reload.
         t2 = StatusTracker(state_path=path)
         assert t2._state == {}
+
+
+class TestIncidentAccessors:
+    def _seed(self, tracker):
+        tracker.observe("a/0", "blocked", SINCE_A)
+        tracker.record_reported("a/0", TS_1, {"id": "open-1", "opened_at": TS_1})
+        tracker.observe("b/0", "blocked", SINCE_A)
+        tracker.record_reported("b/0", TS_1, {"id": "closed-1", "opened_at": TS_1, "closed_at": TS_2})
+        tracker.observe("c/0", "active", SINCE_A, watched=False)
+
+    def test_units_and_entries(self, tracker):
+        self._seed(tracker)
+        assert tracker.units() == ["a/0", "b/0", "c/0"]
+        assert [u for u, _ in tracker.entries()] == ["a/0", "b/0", "c/0"]
+
+    def test_incidents_default_to_open_ones(self, tracker):
+        self._seed(tracker)
+        assert [(u, i["id"]) for u, _e, i in tracker.incidents()] == [("a/0", "open-1")]
+
+    def test_incidents_can_include_closed(self, tracker):
+        self._seed(tracker)
+        ids = [i["id"] for _u, _e, i in tracker.incidents(include_closed=True)]
+        assert ids == ["open-1", "closed-1"]
+
+    def test_incident_id_matches_open_or_closed(self, tracker):
+        self._seed(tracker)
+        assert [i["id"] for _u, _e, i in tracker.incidents("closed-1")] == ["closed-1"]
+        assert tracker.incidents("nope") == []
+
+    def test_path_property(self, tracker, tmp_path):
+        assert tracker.path == str(tmp_path / "status-state.json")

@@ -85,8 +85,13 @@ CONTEXT = {
     ],
     "systemd_failed": ["postgresql@16-main.service"],
     "systemd_failed_detail": [
-        {"unit": "postgresql@16-main.service", "status": "failed", "substate": "dead",
-         "restarts": "3", "exec_main_status": "1"},
+        {
+            "unit": "postgresql@16-main.service",
+            "status": "failed",
+            "substate": "dead",
+            "restarts": "3",
+            "exec_main_status": "1",
+        },
     ],
     "disk_usage": [
         "Filesystem     Size  Used Avail Use% Mounted on",
@@ -98,8 +103,8 @@ CONTEXT = {
         "Swap:          2.0G  0.5G  1.5G",
     ],
     "ss_connections": [
-        "tcp LISTEN 0 128 0.0.0.0:6432 0.0.0.0:* users:((\"pgbouncer\",pid=1234,fd=7))",
-        "tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=800,fd=3))",
+        'tcp LISTEN 0 128 0.0.0.0:6432 0.0.0.0:* users:(("pgbouncer",pid=1234,fd=7))',
+        'tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=800,fd=3))',
     ],
     "firewall_rules": {
         "iptables": [
@@ -109,14 +114,13 @@ CONTEXT = {
         ],
         "ufw": ["Status: active", "6432/tcp                   ALLOW       Anywhere"],
     },
+    # Live values, as the controller returns them (needs controller credentials).
+    "juju_config": {
+        "max_connections": {"value": 50, "default": 100, "source": "user", "type": "int"},
+        "port": {"value": 5432, "default": 5432, "source": "default", "type": "int"},
+    },
     "charm_config": {
-        "config_yaml": (
-            "options:\n"
-            "  max_connections:\n"
-            "    default: 100\n"
-            "  port:\n"
-            "    default: 5432\n"
-        ),
+        "config_yaml": ("options:\n  max_connections:\n    default: 100\n  port:\n    default: 5432\n"),
         "actions_yaml": (
             "start:\n"
             "  description: Start the PostgreSQL service\n"
@@ -174,7 +178,7 @@ CONTEXT = {
                     "status": "available",
                     "lines": [
                         "2026-07-14 09:55:01 UTC [12345] LOG:  received SIGHUP, reloading configuration files",
-                        "2026-07-14 09:56:00 UTC [12346] WARNING:  database \"app\" has no active replicas",
+                        '2026-07-14 09:56:00 UTC [12346] WARNING:  database "app" has no active replicas',
                         "2026-07-14 09:57:30 UTC [12347] ERROR:  out of disk space on primary",
                     ],
                 },
@@ -200,19 +204,39 @@ CONTEXT = {
         "processes": {
             "type": "plan",
             "items": [
-                {"name": "postgres", "expected_min_count": 1, "expected_max_count": 4,
-                 "running_count": 0, "status": "too_few"},
-                {"name": "pgbouncer", "expected_min_count": 1, "expected_max_count": 1,
-                 "running_count": 1, "status": "ok"},
+                {
+                    "name": "postgres",
+                    "expected_min_count": 1,
+                    "expected_max_count": 4,
+                    "running_count": 0,
+                    "status": "too_few",
+                },
+                {
+                    "name": "pgbouncer",
+                    "expected_min_count": 1,
+                    "expected_max_count": 1,
+                    "running_count": 1,
+                    "status": "ok",
+                },
             ],
         },
         "systemd_units": {
             "type": "plan",
             "items": [
-                {"unit": "postgresql@16-main.service", "status": "failed", "substate": "dead",
-                 "restarts": "3", "exec_main_status": "1"},
-                {"unit": "postgresql-exporter.service", "status": "active", "substate": "running",
-                 "restarts": "0", "exec_main_status": "0"},
+                {
+                    "unit": "postgresql@16-main.service",
+                    "status": "failed",
+                    "substate": "dead",
+                    "restarts": "3",
+                    "exec_main_status": "1",
+                },
+                {
+                    "unit": "postgresql-exporter.service",
+                    "status": "active",
+                    "substate": "running",
+                    "restarts": "0",
+                    "exec_main_status": "0",
+                },
             ],
         },
         "network_ports": {
@@ -233,10 +257,20 @@ CONTEXT = {
         "health_commands": {
             "type": "plan",
             "items": [
-                {"command": "systemctl is-active postgresql@16-main.service", "timeout_seconds": 10,
-                 "returncode": 1, "stdout": "", "stderr": "inactive"},
-                {"command": "pg_isready -h localhost -p 5432", "timeout_seconds": 10,
-                 "returncode": 2, "stdout": "", "stderr": "/tmp:5432 - no response"},
+                {
+                    "command": "systemctl is-active postgresql@16-main.service",
+                    "timeout_seconds": 10,
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "inactive",
+                },
+                {
+                    "command": "pg_isready -h localhost -p 5432",
+                    "timeout_seconds": 10,
+                    "returncode": 2,
+                    "stdout": "",
+                    "stderr": "/tmp:5432 - no response",
+                },
             ],
         },
     },
@@ -256,9 +290,7 @@ def build_report() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         with mock.patch.object(report, "datetime") as fake_datetime:
             fake_datetime.datetime.now.return_value.isoformat.return_value = GENERATED_AT
-            path = report.generate_report(
-                INCIDENT_ID, UNIT_NAME, WORKLOAD, FIRST_SEEN, CONTEXT, tmp
-            )
+            path = report.generate_report(INCIDENT_ID, UNIT_NAME, WORKLOAD, FIRST_SEEN, CONTEXT, tmp)
         return pathlib.Path(path).read_text()
 
 
