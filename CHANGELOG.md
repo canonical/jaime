@@ -10,6 +10,7 @@
 - Render machine report logs as a compact timeline - full `YYYY-MM-DD HH:MM:SS` stamps, consecutive identical messages collapsed to a `×N` count - for `## Recent unit logs` and `## Journal`, and digest the broad network-port fallback to `local-address:port owner`
 - Add a conversational mode: `ask` adds a question/answer turn to an incident without overwriting earlier ones, and `list-suggestions` prints the conversation (the last 20 turns are kept per incident). `ask` can target a closed incident, and needs `incident-id` when several incidents are open
 - Add a `force` parameter to `get-suggestion` to regenerate the suggestion instead of reusing the stored one
+- Add a `max-prompt-bytes` budget (default 60000, active by default) for the prompt built from the stored report in `suggest`/`act` mode: executive summary, recent logs, journal errors/warnings, failure indicators, pod/container state, available actions and charm links are always included and only individually capped; processes, network ports, plan log files, snap status and health commands are included while the budget allows, named when they are not; disk, memory, network connections, firewall rules and the charm config dump are always reduced to a short digest. The report on disk is never bounded by this, only the prompt. `0` disables it
 
 ### Improvements
 
