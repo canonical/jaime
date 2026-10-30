@@ -20,7 +20,7 @@ files.
 | `provider-remote-url` | string | empty | OpenAI-compatible endpoint root for `remote` (e.g. `http://host:11434/v1`). Required when `provider=remote`; blocks with `gemini`/`openrouter`; ignored with `provider=none`. |
 | `watch-statuses` | string | `error,blocked` | Unit workload statuses that open an incident. |
 | `failure-timeout-minutes` | int | `5` | How long a watched status must persist before an incident opens. |
-| `cooldown-minutes` | int | `30` | Minimum time before another report for the same unresolved incident. |
+| `cooldown-minutes` | int | `30` | Minimum time between report versions for the same unresolved incident. |
 | `log-window-minutes` | int | `30` | How far back to collect recent logs. |
 | `max-context-lines` | int | `500` | Per-item cap on collected lines, tightened per section. Not a report or prompt total. |
 | `report-dir` | string | `/var/log/jaime/reports` | Directory where Markdown reports are written. |
@@ -123,8 +123,12 @@ before the timeout does not open an incident.
 
 ## `cooldown-minutes`
 
-Prevents another report for the same unresolved incident from being generated
-too soon, for example when `update-status` runs every few minutes.
+Paces the reports of an unresolved incident. A unit that stays unhealthy keeps
+**one** incident for the whole episode. Each time `cooldown-minutes` elapses,
+Jaime collects fresh context and writes a new report version for that same
+incident, without calling the AI provider; `get-suggestion` and `ask` then use
+the latest version. A new incident is opened only after the unit recovers and
+becomes unhealthy again.
 
 Default:
 
@@ -135,7 +139,11 @@ cooldown-minutes: 30
 ## `log-window-minutes`
 
 How far back recent logs are collected (unit logs, journal and workload service
-logs on the machine charm; pod and container logs on Kubernetes).
+logs on the machine charm; pod and container logs on Kubernetes) when there is
+no incident start to anchor to, for example `collect-context`. Incident reports
+start at the incident's first-seen time instead (minus a 5 minute buffer on the
+machine charm), so the error that started the incident stays in the window;
+they are bounded by line count and by the bytes read from the end of each log.
 
 Default:
 
@@ -157,18 +165,22 @@ max-context-lines: 500
 
 ## `report-dir`
 
-Directory where Markdown reports are written, one file per incident, named after
-the incident id:
+Directory where Markdown reports are written. The first report of an incident
+is named after the incident id and is never rewritten; later versions, written
+after each cooldown period or by `generate-report`, add a UTC timestamp:
 
 ```text
 /var/log/jaime/reports/<incident-id>.md
+/var/log/jaime/reports/<incident-id>-20261030T101500Z.md
 ```
 
 Default: `/var/log/jaime/reports`.
 
 ## `audit-log-path`
 
-Path to the structured JSONL audit log, one JSON object per line.
+Path to the structured JSONL audit log, one JSON object per line. The log is
+rotated when it reaches 10 MiB: `<path>.1` is the newest archive and five are
+kept. `list-incidents` reads the archives with the live file.
 
 Default: `/var/log/jaime/events.jsonl`.
 
@@ -179,7 +191,10 @@ A representative `incident-start` event:
 ```
 
 `list-incidents` correlates `incident-start`, `report-generated` and
-`incident-closed` events by incident id.
+`incident-closed` events by incident id. When collection or report writing
+fails, Jaime opens no incident and writes an `incident-report-failed` event
+(with the unit and the error, no incident id), then retries on the next
+`update-status`.
 
 ## `watch-applications`
 
@@ -242,9 +257,14 @@ A JSON diagnostics plan. The format differs per substrate.
 
 **Machine subordinate.** A plan describing what to collect on the host (log
 files, processes, environment variables, network ports, systemd units, health
-commands). When empty, Jaime attempts to generate a plan via AI on
-relation-joined, and falls back to an empty plan if no provider is configured.
-The schema is `DIAGNOSTICS_SCHEMA` in `jaime-package/jaime/diagnostics.py`.
+commands). A plan set here is applied on `config-changed`, without
+re-relating; an invalid plan blocks the unit. The `log_files`, `processes`,
+`env_variables` and `network` sections are required (they may be empty
+lists), and field types and enums are checked. When empty, Jaime attempts to
+generate a plan via AI on relation-joined, and again when the option is
+cleared; it falls back to an empty plan if no provider is configured or the
+generated plan is invalid. The schema is `DIAGNOSTICS_SCHEMA` in
+`jaime-package/jaime/diagnostics.py`.
 
 **Kubernetes standalone.** An object keyed by application name. Each value may
 set `containers`, `log_patterns`, `env_variables` and `ports`, checked against
