@@ -25,6 +25,7 @@
 - `Client.FullStatus` is fetched at most once per hook on both charms
 - Machine log files are read from the end with a byte bound instead of being loaded whole, and `snap list`/`snap services` run once per collection
 - `context-collected` is now audited on both charms
+- `## Charm config` lists up to 400 options instead of 100, so large charms such as postgresql (about 360 options) are shown in full
 
 ### Removals
 

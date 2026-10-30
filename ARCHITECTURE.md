@@ -294,7 +294,7 @@ the data is unavailable the header falls back to the unit line alone.
 `## Charm config` is one section for both substrates. It lists every option of
 the monitored charm as `name: value`, flags those whose value differs from the
 default with `# changed from default (<default>)` and lists them first, so they
-survive the 100-option cap. Values come from the controller's `Application.Get`
+survive the 400-option cap. Values come from the controller's `Application.Get`
 (k8s always; machine when `juju-api-user`/`juju-api-password` are set); the
 machine charm also reads the declared options from the principal's
 `config.yaml`. Without controller credentials only the declared defaults are

@@ -22,7 +22,7 @@ from jaime.redact import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REPORT_DIR = "/var/log/jaime/reports"
-_MAX_CHARM_OPTIONS = 100
+_MAX_CHARM_OPTIONS = 400
 
 
 def _append(lines: list[str], *chunks: list[str]) -> None:

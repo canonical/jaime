@@ -260,7 +260,7 @@ files, processes, environment variables, network ports, systemd units, health
 commands). A plan set here is applied on `config-changed`, without
 re-relating; an invalid plan blocks the unit. The `log_files`, `processes`,
 `env_variables` and `network` sections are required (they may be empty
-lists), and field types and enums are checked. When empty, Jaime attempts to
+lists), and field types and allowed values are checked. When empty, Jaime attempts to
 generate a plan via AI on relation-joined, and again when the option is
 cleared; it falls back to an empty plan if no provider is configured or the
 generated plan is invalid. The schema is `DIAGNOSTICS_SCHEMA` in
