@@ -134,6 +134,47 @@ class TestK8sApiClient:
         assert "BackOff" in events[0]
         assert "Warning" in events[0]
 
+    def test_get_pod_events_includes_repeat_count(self):
+        client = _make_client()
+        with mock.patch.object(
+            client,
+            "_request",
+            return_value={
+                "items": [
+                    {
+                        "type": "Warning",
+                        "reason": "BackOff",
+                        "message": "Back-off restarting failed container",
+                        "lastTimestamp": "2026-08-18T10:05:00Z",
+                        "count": 14,
+                    },
+                ],
+            },
+        ):
+            events = client.get_pod_events("app-0")
+        assert len(events) == 1
+        assert "×14" in events[0]
+
+    def test_get_pod_events_omits_count_suffix_when_one(self):
+        client = _make_client()
+        with mock.patch.object(
+            client,
+            "_request",
+            return_value={
+                "items": [
+                    {
+                        "type": "Normal",
+                        "reason": "Pulled",
+                        "message": "Container image pulled",
+                        "lastTimestamp": "2026-08-18T10:05:00Z",
+                        "count": 1,
+                    },
+                ],
+            },
+        ):
+            events = client.get_pod_events("app-0")
+        assert "×" not in events[0]
+
     def test_get_pod_events_handles_none_timestamps(self):
         """Events with a missing/None lastTimestamp must not break sorting."""
         client = _make_client()

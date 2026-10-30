@@ -10,9 +10,11 @@
 - Render machine report logs as a compact timeline - full `YYYY-MM-DD HH:MM:SS` stamps, consecutive identical messages collapsed to a `×N` count - for `## Recent unit logs` and `## Journal`, and digest the broad network-port fallback to `local-address:port owner`
 - Add a conversational mode: `ask` adds a question/answer turn to an incident without overwriting earlier ones, and `list-suggestions` prints the conversation (the last 20 turns are kept per incident). `ask` can target a closed incident, and needs `incident-id` when several incidents are open
 - Add a `force` parameter to `get-suggestion` to regenerate the suggestion instead of reusing the stored one
+- Add a `max-prompt-bytes` budget (default 60000, active by default) for the prompt built from the stored report in `suggest`/`act` mode: executive summary, recent logs, journal errors/warnings, failure indicators, pod/container state, available actions and charm links are always included and only individually capped; processes, network ports, plan log files, snap status and health commands are included while the budget allows, named when they are not; disk, memory, network connections, firewall rules and the charm config dump are always reduced to a short digest; Kubernetes events keep Warning lines verbatim and collapse Normal lines to one count line. A changed config option named in the summary is not repeated in the charm config digest. The report on disk is never bounded by this, only the prompt. `0` disables it
 
 ### Improvements
 
+- Kubernetes event lines in the incident report now show the event's own repeat count (`×N`, e.g. a `BackOff` firing 14 times), previously discarded
 - Report lists no longer put a blank line after every bullet
 - `## Charm config` in the report now lists every option of the monitored charm with its value and flags those changed from the default. It replaces `## Juju application config`. On the machine charm, values need `juju-api-user`/`juju-api-password`; without them the declared defaults are shown
 - The suggestion prompt repeats its response-format rules after the report, so small local models that truncate long prompts still answer in the expected format

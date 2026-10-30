@@ -682,27 +682,34 @@ Tier model:
 - Tier 3 — digest only, never raw: disk, memory, `ss` connections, firewall
   rules, full charm and Juju config dumps
 
-- [ ] [project] Revise the descriptive `ARCHITECTURE.md` statements when the
+- [x] [project] Revise the descriptive `ARCHITECTURE.md` statements when the
       projection lands: "there is no separate raw context bundle" and "the AI is
       given the stored report". The design is already recorded under "Context
       evidence and prompt projection"
-- [ ] [python] Build the projection as a pure function of the stored report, a
+- [x] [python] Build the projection as a pure function of the stored report, a
       budget and a projection version, so it is reproducible without persisting a
       second artifact. This requires the report to keep stable section headings
-- [ ] [python] Keep pod events structured (type, reason, count, lastTimestamp)
-      rather than pre-formatted strings, so the projection can keep Warning and
-      count Normal. Structuring belongs here because the projection is its first
-      consumer
-- [ ] [python] Add a global prompt budget (`max-prompt-bytes` or an estimated
-      token count): Tier 1 always fits, Tier 2 until exhausted, Tier 3 reduced to
-      digests, with explicit "… N lines omitted …" markers
-- [ ] [python] De-duplicate across sections: the summary repeats error lines that
-      also appear in "Recent unit logs", and changed config appears twice
-- [ ] [python] Record the projection size and version in the
+- [x] [python] Keep pod events' repeat count visible (`get_pod_events` now
+      renders the event's own `count` as a `×N` suffix instead of discarding
+      it) and tier "Kubernetes events" as Warning kept verbatim, Normal
+      collapsed to one count line - implemented as a section-specific text
+      parse in `projection.py` rather than restructuring `k8s_events` into
+      dicts through `collector.py` and `report.py`, which stayed unchanged
+- [x] [python] Add a global prompt budget (`max-prompt-bytes`): Tier 1 always
+      fits (individually capped, not budget-gated), Tier 2 included while the
+      budget allows, Tier 3 always reduced to digests, with explicit omission
+      markers naming the section that did not fit
+- [x] [python] De-duplicate identical lines across sections (after whitespace
+      normalisation): the summary's error lines no longer repeat verbatim in
+      "Recent unit logs"
+- [x] [python] De-duplicate a changed config option between the executive
+      summary and "Charm config" by option name, since the two sections use
+      different line formats and the line-level dedup above does not catch it
+- [x] [python] Record the projection size and version in the
       `suggestion-generated` audit event, so the AI interaction stays auditable
-- [ ] [test] Cover under and over budget, Tier 1 never truncated, and identical
+- [x] [test] Cover under and over budget, Tier 1 never truncated, and identical
       output for a fixed report and budget
-- [ ] [docs] Document the budget option and the tier model
+- [x] [docs] Document the budget option and the tier model
 
 ### 6.2. Kubernetes integration job in CI
 
