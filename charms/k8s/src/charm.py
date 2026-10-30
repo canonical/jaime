@@ -26,10 +26,10 @@ from jaime.controller import (
 )
 from jaime.core import CREDENTIALS_REJECTED, CREDENTIALS_REQUIRED, CoreMixin
 from jaime.diagnostics import validate_k8s_diagnostics
-from jaime.incident import Incident
 from jaime.k8s_api import K8sApiClient
-from jaime.logging import write_event
+from jaime.names import app_of
 from jaime.principal import StatusTracker
+from jaime.timeutil import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -59,25 +59,15 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
     # ------------------------------------------------------------------
 
     def _on_update_status(self, event):
-        self._monitor()
+        with self._hook_cache():
+            self._monitor()
 
-    def _on_config_changed(self, event):
-        super()._on_config_changed(event)
-        if isinstance(self.unit.status, BlockedStatus):
-            return
+    def _substrate_config_error(self) -> str | None:
+        """Block on an invalid diagnostics plan, auditing the rejection."""
         plan, diag_error = self._parse_diagnostics_config()
         if diag_error:
-            self.unit.status = BlockedStatus(f"invalid diagnostics config: {diag_error}")
-            write_event(
-                {
-                    "event": "diagnostics-config-invalid",
-                    "unit": self.unit.name,
-                    "error": diag_error,
-                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                },
-                self.model.config.get("audit-log-path", ""),
-            )
-            return
+            self._audit("diagnostics-config-invalid", unit=self.unit.name, error=diag_error)
+            return f"invalid diagnostics config: {diag_error}"
         if plan:
             unknown = sorted(set(plan) - set(self._watch_applications()))
             if unknown:
@@ -85,9 +75,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
                     "diagnostics plan for unmonitored applications ignored: %s",
                     ", ".join(unknown),
                 )
-        prereq = self._prerequisite_error()
-        if prereq:
-            self.unit.status = BlockedStatus(prereq)
+        return None
 
     def _parse_diagnostics_config(self) -> tuple[dict | None, str | None]:
         """Return (plan, error) for the keyed k8s diagnostics config.
@@ -116,10 +104,6 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
             return None
         return plan.get(app_name)
 
-    def _watch_applications(self) -> list[str]:
-        raw = self.model.config.get("watch-applications", "")
-        return [a.strip() for a in raw.split(",") if a.strip()]
-
     def _monitored_applications(self) -> list[str]:
         """Applications resolved as monitored, derived from persisted state.
 
@@ -129,7 +113,7 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
         keeps the answer correct outside a monitoring cycle.
         """
         watch = set(self._watch_applications())
-        tracked = {name.split("/")[0] for name in self._status_tracker.units()}
+        tracked = {app_of(name) for name in self._status_tracker.units()}
         return sorted(app for app in tracked if app in watch)
 
     def _prerequisite_error(self) -> str | None:
@@ -156,9 +140,9 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
             return CREDENTIALS_REQUIRED
 
         # 2. The controller must be reachable and the credentials accepted.
+        #    The FullStatus fetched here is reused by the rest of the hook.
         try:
-            with self._controller_session() as client:
-                full = client.full_status()
+            full = self._full_status()
         except ControllerAuthError:
             return CREDENTIALS_REJECTED
         except Exception as e:
@@ -211,24 +195,21 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
         try:
             statuses = self._fetch_unit_statuses()
-        except ControllerAuthError as e:
-            logger.error("Juju controller authentication failed: %s", e)
-            self.unit.status = BlockedStatus("juju-api credentials rejected by controller")
-            return
         except ControllerError as e:
-            logger.warning("could not fetch unit statuses: %s", e)
-            self.unit.status = MaintenanceStatus(str(e)[:100])
+            self.unit.status = self._controller_error_status(e)
             return
 
         if not statuses:
             self.unit.status = MaintenanceStatus("no units matched watch-applications")
             return
 
-        now = datetime.datetime.now(datetime.timezone.utc)
-        for unit_name, info in statuses.items():
-            status = info["status"]
-            since_iso = info["since"] or now.isoformat()
-            self._process_unit(unit_name, status, since_iso, info.get("message", ""))
+        now_iso = utc_now_iso()
+        self._process_units(
+            [
+                (unit_name, info["status"], info["since"] or now_iso, info.get("message", ""))
+                for unit_name, info in statuses.items()
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Juju controller access
@@ -236,10 +217,8 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
     def _fetch_unit_statuses(self) -> dict[str, dict]:
         """Fetch per-unit workload statuses from the Juju controller API."""
-        with self._controller_session() as client:
-            full = client.full_status()
         return extract_unit_statuses(
-            full,
+            self._full_status(),
             watch_applications=self._watch_applications(),
         )
 
@@ -253,8 +232,8 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
 
     def _fetch_app_metadata(self, app_name: str) -> dict:
         """Fetch an application's charm metadata for the report header."""
-        return self._controller_query(
-            lambda client: extract_app_metadata(client.full_status(), app_name),
+        return self._full_status_query(
+            lambda full_status: extract_app_metadata(full_status, app_name),
             {},
             f"app metadata for {app_name}",
         )
@@ -320,43 +299,16 @@ class JaimeK8sCharm(CoreMixin, CharmBase):
     # Substrate hooks used by CoreMixin
     # ------------------------------------------------------------------
 
-    def _collect_incident_context(self, unit_name: str, since_iso: str, incident: Incident) -> dict:
+    def _collect_context(self, unit_name: str, from_time: datetime.datetime | None) -> dict:
         """Collect Kubernetes diagnostic context (pod logs, spec, events)."""
-        log_window = self.model.config.get("log-window-minutes", 30)
-        max_lines = self.model.config.get("max-context-lines", 500)
-        try:
-            since_dt = datetime.datetime.fromisoformat(since_iso)
-        except ValueError:
-            since_dt = None
-
+        app_name = app_of(unit_name)
         context = collect_context(
             unit_name,
-            log_window,
-            max_lines,
-            from_time=since_dt,
-            diagnostics_plan=self._app_diagnostics_plan(unit_name.split("/")[0]),
+            self.model.config.get("log-window-minutes", 30),
+            self.model.config.get("max-context-lines", 500),
+            from_time=from_time,
+            diagnostics_plan=self._app_diagnostics_plan(app_name),
         )
-        app_name = unit_name.split("/")[0]
-        context["juju_config"] = self._fetch_app_config(app_name)
-        context["app_metadata"] = self._fetch_app_metadata(app_name)
-        return context
-
-    def _collect_report_context(self, unit_name: str, since_iso: str) -> dict:
-        """Collect context for a manually regenerated report."""
-        log_window = self.model.config.get("log-window-minutes", 30)
-        max_lines = self.model.config.get("max-context-lines", 500)
-        try:
-            since_dt = datetime.datetime.fromisoformat(since_iso)
-        except ValueError:
-            since_dt = None
-        context = collect_context(
-            unit_name,
-            log_window,
-            max_lines,
-            from_time=since_dt,
-            diagnostics_plan=self._app_diagnostics_plan(unit_name.split("/")[0]),
-        )
-        app_name = unit_name.split("/")[0]
         context["juju_config"] = self._fetch_app_config(app_name)
         context["app_metadata"] = self._fetch_app_metadata(app_name)
         return context

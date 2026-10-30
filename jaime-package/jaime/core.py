@@ -1,11 +1,11 @@
 """Shared charm logic for both the machine and k8s Jaime charms.
 
 This module contains the substrate-agnostic behaviour that both charms share:
-mode/provider enums, AI provider wiring, the suggest/act engine invocation,
-usage tracking, audit logging, action handlers, and the per-unit incident
-lifecycle state machine. Each concrete charm subclasses ``CoreMixin`` and
-supplies only the substrate-specific hooks (how units are discovered and how
-context is collected).
+mode/provider enums, AI provider wiring, the suggest engine invocation, usage
+tracking, audit logging, action handlers, and the per-unit incident lifecycle
+state machine. Each concrete charm subclasses ``CoreMixin`` and supplies only
+the substrate-specific hooks (how units are discovered and how context is
+collected).
 
 Note: this module is the charm controller layer and deliberately imports the
 ops status classes; it is shared between the two charms but is not part of
@@ -13,17 +13,19 @@ the substrate-agnostic pure library.
 """
 
 import contextlib
-import datetime
+import dataclasses
 import hashlib
 import json
 import logging
+import os
 import traceback
 
-from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, StatusBase, WaitingStatus
 
 from jaime.actions import ActionsMixin
 from jaime.check_cache import CheckCache
 from jaime.controller import (
+    ControllerAuthError,
     ControllerError,
     JujuControllerClient,
     agent_conf_path,
@@ -33,7 +35,8 @@ from jaime.incident import Incident, Suggestion, Turn
 from jaime.logging import write_event
 from jaime.modes import Mode, Provider
 from jaime.report import generate_report
-from jaime.suggest import run_act, run_ask, run_suggest
+from jaime.suggest import run_ask, run_suggest
+from jaime.timeutil import parse_ts, utc_now, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +50,14 @@ class CoreMixin(ActionsMixin):
 
     Concrete charms must inherit from ``CoreMixin`` and ``CharmBase``, create
     ``self._status_tracker`` in ``__init__``, observe events, and implement the
-    substrate hooks:
+    substrate hook:
 
-    - ``_collect_incident_context(unit, since_iso, incident)`` -> context dict
-    - ``_collect_report_context(unit, since_iso)`` -> context dict
+    - ``_collect_context(unit, from_time)`` -> context dict, where
+      ``from_time`` is the aware datetime the incident window starts at, or
+      None for a window ending now.
+
+    Optional hooks, each returning a blocked-status message or None:
+    ``_substrate_config_error()`` and ``_prerequisite_error()``.
     """
 
     # ------------------------------------------------------------------
@@ -58,53 +65,69 @@ class CoreMixin(ActionsMixin):
     # ------------------------------------------------------------------
 
     def _on_config_changed(self, event):
-        """Validate config and AI provider connectivity on config change."""
-        try:
-            mode = Mode(self.model.config.get("mode", Mode.OBSERVE))
-        except ValueError:
+        """Validate config, then the substrate config and prerequisites.
+
+        The first failing check blocks the unit. When all pass, the status is
+        reconciled with any open incident.
+        """
+        with self._hook_cache():
+            for check in (self._shared_config_error, self._substrate_config_error, self._prerequisite_error):
+                error = check()
+                if error:
+                    self.unit.status = BlockedStatus(error)
+                    return
+            self._refresh_status_after_config()
+
+    def _shared_config_error(self) -> str | None:
+        """Validate the options shared by both charms, AI connectivity included."""
+        mode = self._mode()
+        if mode is None:
             valid = ", ".join(m.value for m in Mode)
-            self.unit.status = BlockedStatus(f"invalid mode '{self.model.config.get('mode')}', must be one of: {valid}")
-            return
+            return f"invalid mode '{self.model.config.get('mode')}', must be one of: {valid}"
 
         try:
-            Provider(self.model.config.get("provider", Provider.NONE))
+            provider_name = Provider(self.model.config.get("provider", Provider.NONE))
         except ValueError:
             valid = ", ".join(p.value for p in Provider)
-            self.unit.status = BlockedStatus(
-                f"invalid provider '{self.model.config.get('provider')}', must be one of: {valid}"
-            )
-            return
+            return f"invalid provider '{self.model.config.get('provider')}', must be one of: {valid}"
 
         # provider-remote-url has exactly one consumer, the remote provider.
         # Set alongside gemini or openrouter it is a misconfiguration, so
         # surface it rather than letting it pass unnoticed. With provider=none
         # it is dead config (no provider is used), so it is left alone.
         remote_url = (self.model.config.get("provider-remote-url", "") or "").strip()
-        if remote_url and Provider(self.model.config.get("provider", Provider.NONE)) in (
-            Provider.GEMINI,
-            Provider.OPENROUTER,
-        ):
-            self.unit.status = BlockedStatus("provider-remote-url is set but provider is not 'remote'")
-            return
+        if remote_url and provider_name in (Provider.GEMINI, Provider.OPENROUTER):
+            return "provider-remote-url is set but provider is not 'remote'"
 
         # Act mode is gated until command allowlisting is implemented.
         if mode == Mode.ACT:
-            self.unit.status = BlockedStatus("act mode is not yet implemented")
-            return
+            return "act mode is not yet implemented"
 
         provider, provider_err = self._get_ai_provider()
-        if provider is None and mode in (Mode.SUGGEST, Mode.ACT):
-            self.unit.status = BlockedStatus(provider_err)
-            return
+        if provider is None and mode == Mode.SUGGEST:
+            return provider_err
 
         if provider is not None:
             err = provider.check()
             if err:
                 logger.error("AI provider connectivity check failed: %s", err)
-                self.unit.status = BlockedStatus(f"AI provider error: {err[:100]}")
-                return
+                return f"AI provider error: {err[:100]}"
+        return None
 
-        self._refresh_status_after_config()
+    def _substrate_config_error(self) -> str | None:
+        """Substrate-specific config check; None when there is nothing to report."""
+        return None
+
+    def _prerequisite_error(self) -> str | None:
+        """Blocked-status message while a substrate prerequisite is unmet, or None."""
+        return None
+
+    def _mode(self) -> Mode | None:
+        """The configured mode, or None when the option holds an invalid value."""
+        try:
+            return Mode(self.model.config.get("mode", Mode.OBSERVE))
+        except ValueError:
+            return None
 
     def _refresh_status_after_config(self) -> None:
         """Reconcile the display status after a config change.
@@ -119,12 +142,17 @@ class CoreMixin(ActionsMixin):
             return
         self.unit.status = ActiveStatus(self._ready_message())
 
+    def _watch_applications(self) -> list[str]:
+        """Applications named in watch-applications, in config order."""
+        raw = self.model.config.get("watch-applications", "") or ""
+        return [a.strip() for a in raw.split(",") if a.strip()]
+
     def _monitored_applications(self) -> list[str]:
         """Applications resolved as monitored this cycle, substrate-specific.
 
         The default is empty, so a substrate that does not resolve a set (or a
         test that does not populate one) reports a plain ``Ready``. Concrete
-        charms override this and cache the set for the cycle.
+        charms override this.
         """
         return []
 
@@ -188,9 +216,16 @@ class CoreMixin(ActionsMixin):
         """Log a structured JSON event (the unit log, not the audit file)."""
         logger.log(level, json.dumps({"event": event, **fields, "timestamp": now}))
 
-    def _audit(self, event: str, now: str, **fields) -> None:
-        """Append an event to the JSONL audit log."""
-        write_event({"event": event, **fields, "timestamp": now}, self.model.config.get("audit-log-path", ""))
+    def _audit(self, event: str, now: str = "", **fields) -> None:
+        """Append an event to the JSONL audit log (timestamped now by default)."""
+        write_event(
+            {"event": event, **fields, "timestamp": now or utc_now_iso()},
+            self.model.config.get("audit-log-path", ""),
+        )
+
+    # ------------------------------------------------------------------
+    # Juju controller access
+    # ------------------------------------------------------------------
 
     def _resolve_juju_password(self) -> str:
         """Resolve the Juju API password from config (plain or secret URI)."""
@@ -219,6 +254,43 @@ class CoreMixin(ActionsMixin):
             client.login(self.model.config.get("juju-api-user", ""), self._resolve_juju_password())
             yield client
 
+    @contextlib.contextmanager
+    def _hook_cache(self):
+        """Scope the per-hook controller data to one handler.
+
+        Each hook is a fresh process, so this is a no-op in production; it
+        keeps data from leaking between handlers that share an instance, as
+        in unit tests.
+        """
+        self._full_status_result = None
+        try:
+            yield
+        finally:
+            self._full_status_result = None
+
+    def _full_status(self) -> dict:
+        """``Client.FullStatus`` for the model, fetched at most once per hook.
+
+        Every caller in a hook shares one connection, login and fetch. A
+        failure is remembered too, so an unreachable controller costs one
+        timeout per hook rather than one per caller. Raises ``ControllerError``
+        (``ControllerAuthError`` when the credentials are rejected).
+        """
+        cached = getattr(self, "_full_status_result", None)
+        if cached is None:
+            try:
+                with self._controller_session() as client:
+                    cached = (True, client.full_status())
+            except ControllerError as e:
+                cached = (False, e)
+            except Exception as e:
+                cached = (False, ControllerError(f"FullStatus failed: {e}"))
+            self._full_status_result = cached
+        ok, value = cached
+        if not ok:
+            raise value
+        return value
+
     def _controller_query(self, query, default, what: str):
         """Run ``query(client)`` against the controller, best effort.
 
@@ -232,6 +304,27 @@ class CoreMixin(ActionsMixin):
         except Exception as e:
             logger.debug("could not fetch %s: %s", what, e)
             return default
+
+    def _full_status_query(self, query, default, what: str):
+        """Run ``query(full_status)`` on the per-hook FullStatus, best effort."""
+        try:
+            return query(self._full_status())
+        except Exception as e:
+            logger.debug("could not fetch %s: %s", what, e)
+            return default
+
+    @staticmethod
+    def _controller_error_status(error: ControllerError) -> StatusBase:
+        """Unit status for a controller error met while fetching statuses."""
+        if isinstance(error, ControllerAuthError):
+            logger.error("Juju controller authentication failed: %s", error)
+            return BlockedStatus(CREDENTIALS_REJECTED)
+        logger.warning("could not fetch unit statuses: %s", error)
+        return MaintenanceStatus(str(error)[:100])
+
+    # ------------------------------------------------------------------
+    # Secrets
+    # ------------------------------------------------------------------
 
     def _resolve_api_token(self) -> str:
         """Resolve the api-token config value (secret URI or plain string)."""
@@ -256,7 +349,7 @@ class CoreMixin(ActionsMixin):
         return mapping.get(provider_name, "")
 
     # ------------------------------------------------------------------
-    # Suggest / act
+    # Suggest
     # ------------------------------------------------------------------
 
     def _run_mode_logic(
@@ -267,13 +360,14 @@ class CoreMixin(ActionsMixin):
         history: list[dict] | None = None,
         block_on_error: bool = True,
     ) -> Suggestion | None:
-        """Run suggest or act logic based on the configured mode.
+        """Run the suggest logic when the configured mode is ``suggest``.
 
         A non-empty ``question`` answers it as a conversational turn, with
-        ``history`` carrying the prior turns; act mode ignores both. On
-        failure the reason is left in ``self._last_ai_error``, and the unit is
-        set to blocked unless ``block_on_error`` is false (``ask`` reports the
-        error to the caller instead, since a bot may retry it often).
+        ``history`` carrying the prior turns. On failure the reason is left in
+        ``self._last_ai_error``, and the unit is set to blocked unless
+        ``block_on_error`` is false (``ask`` reports the error to the caller
+        instead, since a bot may retry it often). Act mode is gated and never
+        calls the provider.
         """
         self._last_ai_error = ""
 
@@ -282,14 +376,10 @@ class CoreMixin(ActionsMixin):
             if block_on_error:
                 self.unit.status = BlockedStatus(message)
 
-        try:
-            mode = Mode(self.model.config.get("mode", Mode.OBSERVE))
-        except ValueError:
-            return None
-        if mode not in (Mode.SUGGEST, Mode.ACT):
-            return None
+        mode = self._mode()
         if mode == Mode.ACT:
             logger.warning("act mode is not yet implemented — ignoring")
+        if mode != Mode.SUGGEST:
             return None
 
         provider, provider_err = self._get_ai_provider()
@@ -305,27 +395,11 @@ class CoreMixin(ActionsMixin):
             return None
 
         try:
-            if mode == Mode.SUGGEST:
-                if question:
-                    return run_ask(provider, report_content, question, history)
-                return run_suggest(provider, report_content, additional_context)
-
-            suggestion, act_results = run_act(provider, report_content, additional_context)
-            for result in act_results:
-                write_event(
-                    {
-                        "event": "act-command-executed",
-                        "command": result["command"],
-                        "returncode": result["returncode"],
-                        "stderr": result.get("stderr", ""),
-                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    },
-                    self.model.config.get("audit-log-path", ""),
-                )
-            return suggestion
-
+            if question:
+                return run_ask(provider, report_content, question, history)
+            return run_suggest(provider, report_content, additional_context)
         except Exception as e:
-            logger.error("AI provider call failed in mode '%s': %s", mode.value, traceback.format_exc())
+            logger.error("AI provider call failed: %s", traceback.format_exc())
             fail(f"AI provider error: {str(e)[:100]}")
             return None
 
@@ -346,7 +420,7 @@ class CoreMixin(ActionsMixin):
                 ]
             ).encode()
         ).hexdigest()
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = utc_now()
         if cache.is_fresh(key, now):
             return None
         err = provider.check()
@@ -363,31 +437,37 @@ class CoreMixin(ActionsMixin):
     def _store_turn(self, unit_name: str, incident_dict: dict, turn: Turn, history_count: int = 0) -> Turn:
         """Append a conversational turn to the incident, prune, persist, audit.
 
-        Returns the persisted turn, carrying its assigned per-incident id.
+        The turn records the incident's current report version, the one its
+        prompt was built from. Returns the persisted turn, carrying its
+        assigned per-incident id.
         """
-        updated = Incident.from_dict(incident_dict).append_turn(turn)
+        incident = Incident.from_dict(incident_dict)
+        turn = dataclasses.replace(turn, report_file=turn.report_file or incident.report_name)
+        updated = incident.append_turn(turn)
         turn = updated.turns[-1]
         updated = updated.prune_turns()
         self._status_tracker.update_incident(unit_name, updated.to_dict())
+        self._status_tracker.set_ai_error(unit_name, "")
 
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = utc_now_iso()
         extra = {"usage": turn.usage.to_dict()} if turn.usage is not None else {}
         self._audit(
             "suggestion-generated",
             now,
             unit=unit_name,
-            incident_id=incident_dict["id"],
+            incident_id=incident.id,
             turn_id=turn.id,
             question=turn.question,
             history_turns=history_count,
             commands=list(turn.commands),
+            report_file=turn.report_file,
             mode=self.model.config.get("mode", Mode.OBSERVE.value),
             **extra,
         )
 
         if turn.usage is not None:
             usage_entry = turn.usage.to_dict()
-            usage_entry["incident_id"] = incident_dict["id"]
+            usage_entry["incident_id"] = incident.id
             usage_entry["turn_id"] = turn.id
             usage_entry["timestamp"] = now
             self._status_tracker.record_usage(unit_name, usage_entry)
@@ -398,15 +478,40 @@ class CoreMixin(ActionsMixin):
     # Incident lifecycle (shared state machine)
     # ------------------------------------------------------------------
 
-    def _process_unit(self, unit_name: str, status: str, since_iso: str, message: str = "") -> None:
+    @staticmethod
+    def _status_rank(status: StatusBase) -> int:
+        """Severity used to pick one unit status from several per-unit results."""
+        if isinstance(status, BlockedStatus):
+            return 3
+        if isinstance(status, ActiveStatus) and status.message.startswith("incident open"):
+            return 2
+        if isinstance(status, (WaitingStatus, MaintenanceStatus)):
+            return 1
+        return 0
+
+    def _process_units(self, observations: list[tuple[str, str, str, str]]) -> None:
+        """Drive the incident lifecycle for every observed unit, then set one status.
+
+        ``observations`` holds ``(unit, status, since_iso, message)`` tuples.
+        The unit status is the most severe per-unit result, so a healthy unit
+        processed last cannot hide another unit's incident.
+        """
+        results = [self._process_unit(*observation) for observation in observations]
+        if results:
+            self.unit.status = max(results, key=self._status_rank)
+
+    def _process_unit(self, unit_name: str, status: str, since_iso: str, message: str = "") -> StatusBase:
         """Drive the incident lifecycle for a single observed unit.
 
         ``message`` is the workload status message shown by ``juju status``
         (e.g. "Please initialize OpenBao or integrate with an auto-unseal
         provider"). Empty when the observing path cannot see it — the machine
         charm's goal-state hook tool carries no message.
+
+        Sets and returns the unit's resulting status; ``_process_units``
+        reconciles the results of several units.
         """
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = utc_now()
         ts = now.isoformat()
         watch_statuses = self._watch_statuses()
         failure_timeout = self.model.config.get("failure-timeout-minutes", 5)
@@ -442,8 +547,7 @@ class CoreMixin(ActionsMixin):
                     status,
                     increment,
                 )
-            self.unit.status = ActiveStatus(self._ready_message())
-            return
+            return self._set_status(ActiveStatus(self._ready_message()))
 
         # Time the incident from when Jaime first saw this unit go unhealthy,
         # not from Juju's `since`. Juju bumps `since` every time a charm
@@ -465,11 +569,9 @@ class CoreMixin(ActionsMixin):
         )
 
         # --- Within failure-timeout: waiting ---
-        try:
-            since_dt = datetime.datetime.fromisoformat(first_seen)
-            unhealthy_minutes = (now - since_dt).total_seconds() / 60
-        except ValueError:
-            unhealthy_minutes = failure_timeout  # unknown since: treat as stale
+        first_seen_dt = parse_ts(first_seen)
+        # An unknown first-seen time is treated as stale.
+        unhealthy_minutes = (now - first_seen_dt).total_seconds() / 60 if first_seen_dt else failure_timeout
 
         if unhealthy_minutes < failure_timeout:
             logger.debug(
@@ -478,20 +580,16 @@ class CoreMixin(ActionsMixin):
                 unhealthy_minutes,
                 failure_timeout,
             )
-            self.unit.status = WaitingStatus(f"{status} - waiting ({unhealthy_minutes:.1f}/{failure_timeout} min)")
-            return
+            return self._set_status(
+                WaitingStatus(f"{status} - waiting ({unhealthy_minutes:.1f}/{failure_timeout} min)")
+            )
 
-        # --- Cooldown: incident already open ---
-        last_reported_iso = self._status_tracker.last_reported(unit_name)
-        if last_reported_iso:
-            try:
-                last_reported_dt = datetime.datetime.fromisoformat(last_reported_iso)
-                cooldown_elapsed = (now - last_reported_dt).total_seconds() / 60
-            except ValueError:
-                cooldown_elapsed = cooldown
+        # --- Incident already open: cooldown, then refresh the same incident ---
+        incident_dict = self._status_tracker.current_incident(unit_name) if had_open_incident else None
+        if incident_dict:
+            last_reported_dt = parse_ts(self._status_tracker.last_reported(unit_name))
+            cooldown_elapsed = (now - last_reported_dt).total_seconds() / 60 if last_reported_dt else cooldown
             if cooldown_elapsed < cooldown:
-                incident_dict = self._status_tracker.current_incident(unit_name)
-                short_id = (incident_dict or {}).get("id", "")[:8]
                 self._log_event(
                     logging.DEBUG,
                     "principal-status-cooldown",
@@ -504,14 +602,124 @@ class CoreMixin(ActionsMixin):
                     cooldown_minutes=cooldown,
                     incident=incident_dict,
                 )
-                # Preserve BlockedStatus if a provider error was already set.
-                if not isinstance(self.unit.status, BlockedStatus):
-                    self.unit.status = ActiveStatus(f"incident open: {unit_name} {status} ({short_id})")
-                return
+            else:
+                self._refresh_on_cooldown(unit_name, status, message, first_seen, incident_dict, ts)
+            return self._set_status(self._incident_status(unit_name, status, incident_dict))
 
-        # --- Open a new incident ---
+        return self._set_status(self._open_incident(unit_name, status, message, first_seen, since_iso, increment, ts))
+
+    def _set_status(self, status: StatusBase) -> StatusBase:
+        self.unit.status = status
+        return status
+
+    def _incident_status(self, unit_name: str, workload: str, incident_dict: dict) -> StatusBase:
+        """Status for a unit with an open incident: blocked on a stored AI error."""
+        ai_error = self._status_tracker.ai_error(unit_name)
+        if ai_error:
+            return BlockedStatus(ai_error)
+        return ActiveStatus(f"incident open: {unit_name} {workload} ({incident_dict.get('id', '')[:8]})")
+
+    def _write_incident_report(
+        self,
+        unit_name: str,
+        workload: str,
+        first_seen: str,
+        message: str,
+        incident_id: str,
+        versioned: bool,
+    ) -> tuple[dict, str]:
+        """Collect context and write a report for an incident: ``(context, path)``."""
+        context = self._collect_context(unit_name, parse_ts(first_seen))
+        path = generate_report(
+            incident_id=incident_id,
+            unit_name=unit_name,
+            workload=workload,
+            first_seen=first_seen,
+            context=context,
+            report_dir=self.model.config.get("report-dir", ""),
+            status_message=message,
+            versioned=versioned,
+        )
+        return context, path
+
+    def _audit_report(self, ts: str, unit_name: str, incident_id: str, context: dict, path: str, reason: str) -> None:
+        self._audit(
+            "context-collected",
+            ts,
+            unit=unit_name,
+            incident_id=incident_id,
+            log_lines=len(context.get("unit_logs", [])),
+        )
+        self._audit("report-generated", ts, unit=unit_name, incident_id=incident_id, report_path=path, reason=reason)
+        logger.info("incident %s: report written to %s", incident_id[:8], path)
+
+    def _refresh_report(self, unit_name: str, entry: dict, incident_dict: dict, ts: str, reason: str) -> str:
+        """Write a new report version for an open incident and make it the latest.
+
+        ``entry`` is the unit's tracker entry. Raises when collection or report
+        writing fails, leaving the incident and its earlier versions untouched.
+        """
+        first_seen = entry.get("unhealthy_since") or entry.get("since", "")
+        context, path = self._write_incident_report(
+            unit_name,
+            entry.get("status", "unknown"),
+            first_seen,
+            entry.get("message", ""),
+            incident_dict["id"],
+            versioned=True,
+        )
+        updated = Incident.from_dict(incident_dict).with_report(os.path.basename(path))
+        self._status_tracker.record_reported(unit_name, ts, updated.to_dict())
+        self._audit_report(ts, unit_name, updated.id, context, path, reason)
+        return path
+
+    def _refresh_on_cooldown(
+        self, unit_name: str, workload: str, message: str, first_seen: str, incident_dict: dict, ts: str
+    ) -> None:
+        """Refresh the report of a still-unhealthy unit once its cooldown elapsed.
+
+        No AI call is made; ``get-suggestion`` and ``ask`` use the new version.
+        A failure is audited and retried after the next cooldown period.
+        """
+        self.unit.status = MaintenanceStatus(f"refreshing report: {unit_name} ({incident_dict['id'][:8]})")
+        entry = {"status": workload, "message": message, "unhealthy_since": first_seen}
+        try:
+            self._refresh_report(unit_name, entry, incident_dict, ts, reason="refresh")
+        except Exception as e:
+            logger.error("incident %s: report refresh failed: %s", incident_dict["id"][:8], traceback.format_exc())
+            self._audit("incident-report-failed", ts, unit=unit_name, workload=workload, reason="refresh", error=str(e))
+            self._status_tracker.record_reported(unit_name, ts, incident_dict)
+
+    def _open_incident(
+        self,
+        unit_name: str,
+        status: str,
+        message: str,
+        first_seen: str,
+        since_iso: str,
+        increment: int,
+        ts: str,
+    ) -> StatusBase:
+        """Open an incident: report first, then record it, then suggest.
+
+        The incident is recorded only once its report is on disk. If
+        collection or report writing fails, nothing is recorded, an
+        ``incident-report-failed`` event is audited, and the next cycle retries.
+        """
         incident = Incident.open(status_message=message)
         short_id = incident.id[:8]
+
+        self.unit.status = MaintenanceStatus(f"collecting context: {unit_name} ({short_id})")
+        try:
+            context, report_path = self._write_incident_report(
+                unit_name, status, first_seen, message, incident.id, versioned=False
+            )
+        except Exception as e:
+            logger.error("incident for %s not opened, report failed: %s", unit_name, traceback.format_exc())
+            self._audit("incident-report-failed", ts, unit=unit_name, workload=status, reason="open", error=str(e))
+            return BlockedStatus(f"report failed for {unit_name}: {str(e)[:60]}")
+
+        incident = incident.with_report(os.path.basename(report_path))
         self._log_event(
             logging.INFO,
             "incident-opened",
@@ -535,33 +743,15 @@ class CoreMixin(ActionsMixin):
             status_since=since_iso,
             incident_id=incident.id,
         )
+        self._audit_report(ts, unit_name, incident.id, context, report_path, reason="open")
 
-        # Collect context and generate report via the substrate hook.
-        self.unit.status = MaintenanceStatus(f"collecting context: {unit_name} ({short_id})")
-        context = self._collect_incident_context(unit_name, first_seen, incident)
-
-        report_path = generate_report(
-            incident_id=incident.id,
-            unit_name=unit_name,
-            workload=status,
-            first_seen=first_seen,
-            context=context,
-            report_dir=self.model.config.get("report-dir", ""),
-            status_message=message,
-        )
-        self._audit("report-generated", ts, unit=unit_name, incident_id=incident.id, report_path=report_path)
-        logger.info("incident %s: report written to %s", short_id, report_path)
-
-        # Run suggest/act: produce a Suggestion and attach it to the incident.
+        # Suggest: the provider reads the stored report, never the live context.
         with open(report_path) as f:
             report_content = f.read()
 
-        suggestion = self._run_mode_logic(report_content)
+        suggestion = self._run_mode_logic(report_content, block_on_error=False)
         if suggestion is not None:
             self._store_suggestion(unit_name, incident.to_dict(), suggestion)
-        if not isinstance(self.unit.status, BlockedStatus):
-            self.unit.status = ActiveStatus(f"incident open: {unit_name} {status} ({short_id})")
-
-    # ------------------------------------------------------------------
-    # Shared action handlers
-    # ------------------------------------------------------------------
+        elif self._last_ai_error:
+            self._status_tracker.set_ai_error(unit_name, self._last_ai_error)
+        return self._incident_status(unit_name, status, incident.to_dict())

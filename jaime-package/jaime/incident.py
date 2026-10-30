@@ -1,8 +1,9 @@
 """Incident and Suggestion models for Jaime."""
 
 import dataclasses
-import datetime
 import uuid
+
+from jaime.timeutil import utc_now_iso
 
 
 @dataclasses.dataclass(frozen=True)
@@ -71,7 +72,7 @@ class Suggestion:
         return cls(
             description=description,
             commands=tuple(commands),
-            generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            generated_at=utc_now_iso(),
             context_hash=context_hash,
             usage=usage,
         )
@@ -118,6 +119,9 @@ class Turn:
         generated_at: ISO 8601 timestamp (UTC) when the turn was created.
         context_hash: SHA-256 of the additional-context string, or empty if none.
         usage:        Token usage and cost metadata from the LLM call, or None.
+        report_file:  The report version the answer was based on (a file name
+                      in report-dir), or empty for turns stored before
+                      versions existed, which were based on ``<id>.md``.
     """
 
     id: int
@@ -127,6 +131,7 @@ class Turn:
     generated_at: str = ""
     context_hash: str = ""
     usage: UsageMetadata | None = None
+    report_file: str = ""
 
     @classmethod
     def from_suggestion(cls, suggestion: "Suggestion", question: str = "", turn_id: int = 0) -> "Turn":
@@ -151,6 +156,8 @@ class Turn:
             d["context_hash"] = self.context_hash
         if self.usage is not None:
             d["usage"] = self.usage.to_dict()
+        if self.report_file:
+            d["report_file"] = self.report_file
         return d
 
     @classmethod
@@ -166,6 +173,7 @@ class Turn:
             generated_at=d.get("generated_at", ""),
             context_hash=d.get("context_hash", ""),
             usage=usage,
+            report_file=d.get("report_file", ""),
         )
 
 
@@ -183,6 +191,8 @@ class Incident:
                          with an empty question.
         turn_seq:        Number of turns ever appended; the next turn id is this
                          plus one, so turn ids never repeat even after pruning.
+        report_file:     The latest report version (a file name in report-dir),
+                         or empty for the first report, ``<id>.md``.
     """
 
     id: str
@@ -191,6 +201,7 @@ class Incident:
     closed_at: str | None = None
     turns: tuple[Turn, ...] = ()
     turn_seq: int = 0
+    report_file: str = ""
 
     @classmethod
     def open(cls, status_message: str = "") -> "Incident":
@@ -203,7 +214,7 @@ class Incident:
         """
         return cls(
             id=str(uuid.uuid4()),
-            opened_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            opened_at=utc_now_iso(),
             status_message=status_message,
         )
 
@@ -211,31 +222,22 @@ class Incident:
         """Return a closed copy of this incident with the current UTC time."""
         return dataclasses.replace(
             self,
-            closed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            closed_at=utc_now_iso(),
         )
 
     @property
-    def suggestion(self) -> "Suggestion | None":
-        """The latest turn as a Suggestion (legacy single-shot view), or None."""
-        if not self.turns:
-            return None
-        latest = self.turns[-1]
-        return Suggestion(
-            description=latest.description,
-            commands=latest.commands,
-            generated_at=latest.generated_at,
-            context_hash=latest.context_hash,
-            usage=latest.usage,
-        )
+    def report_name(self) -> str:
+        """File name of the latest report version in report-dir."""
+        return self.report_file or f"{self.id}.md"
+
+    def with_report(self, report_file: str) -> "Incident":
+        """Return a copy whose latest report version is ``report_file``."""
+        return dataclasses.replace(self, report_file=report_file)
 
     @property
     def next_turn_id(self) -> int:
         """The id for the next appended turn (per-incident, 1-based)."""
         return self.turn_seq + 1
-
-    def attach_suggestion(self, suggestion: "Suggestion") -> "Incident":
-        """Return a copy with the suggestion appended as a turn (legacy API)."""
-        return self.append_turn(Turn.from_suggestion(suggestion))
 
     def append_turn(self, turn: Turn) -> "Incident":
         """Return a copy with the turn appended under the next turn id."""
@@ -262,6 +264,8 @@ class Incident:
         if self.turns:
             d["turns"] = [t.to_dict() for t in self.turns]
         d["turn_seq"] = self.turn_seq
+        if self.report_file:
+            d["report_file"] = self.report_file
         return d
 
     @classmethod
@@ -284,4 +288,5 @@ class Incident:
             closed_at=d.get("closed_at"),
             turns=turns,
             turn_seq=int(turn_seq),
+            report_file=d.get("report_file", ""),
         )

@@ -16,7 +16,8 @@ import subprocess
 
 from jaime.logutils import cap_lines as _cap_lines
 from jaime.logutils import deduplicate_lines as _deduplicate_lines
-from jaime.logutils import tail_lines as _tail_lines
+from jaime.logutils import filter_error_context, read_tail
+from jaime.names import unit_tag
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,10 @@ _CAP_MEMORY = 50
 _CAP_CHARM_CONFIG_BYTES = 512 * 1024
 _CAP_HEALTH_OUTPUT = 100
 _CAP_JOURNAL_UNITS = 6
+_CAP_JOURNAL_FETCH = 5000  # journal lines fetched before de-duplication
+
+# A Juju unit log line at ERROR or WARNING level.
+_JUJU_LEVEL_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (ERROR|WARNING)\s")
 
 # The diagnostics plan is operator- or AI-authored, so its item counts are
 # capped too; otherwise a large plan could multiply every per-item limit.
@@ -87,8 +92,7 @@ def collect_tracing_events(
       - ``exception_type``: exception class name if the hook failed, else ``""``
       - ``exception_message``: first line of exception message, else ``""``
     """
-    tag = "unit-" + unit_name.replace("/", "-")
-    db_path = f"/var/lib/juju/agents/{tag}/charm/.tracing-data.db"
+    db_path = f"/var/lib/juju/agents/{unit_tag(unit_name)}/charm/.tracing-data.db"
 
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
@@ -151,11 +155,11 @@ def collect_tracing_events(
                                     "exception_message": "",
                                 }
                             )
-
-        conn.close()
     except Exception as e:
         logger.debug("could not read tracing DB for %s: %s", unit_name, e)
         return []
+    finally:
+        conn.close()
 
     # Sort ascending by timestamp, return most recent max_events
     events.sort(key=lambda e: e["timestamp"])
@@ -173,12 +177,14 @@ def collect_unit_logs(
     """Read recent lines from the principal unit's Juju log file.
 
     The log window is anchored to ``from_time`` when provided (typically the
-    incident's ``first_seen`` timestamp).  Lines before
-    ``from_time - buffer_minutes`` are excluded.  ``log_window_minutes`` still
-    acts as a hard cap so very old incidents don't pull unbounded history.
+    incident's ``first_seen`` timestamp), so the causal error at the start of
+    the episode stays in the window: lines before ``from_time -
+    buffer_minutes`` are excluded, and ``log_window_minutes`` does not apply.
+    History is bounded instead by the bytes read from the end of the file
+    (``MAX_READ_BYTES``) and by ``max_lines``.
 
     When ``from_time`` is None the window falls back to
-    ``now - log_window_minutes`` (the original behaviour).
+    ``now - log_window_minutes``.
 
     Lines are filtered to include only those matching ``(error|warning)``
     (case-insensitive).  All matching lines are included, plus a context
@@ -186,12 +192,10 @@ def collect_unit_logs(
     chronological match.  If no matches are found, all time-bounded lines
     are returned as a fallback.
     """
-    tag = "unit-" + unit_name.replace("/", "-")
-    log_path = os.path.join(_JUJU_LOG_DIR, f"{tag}.log")
+    log_path = os.path.join(_JUJU_LOG_DIR, f"{unit_tag(unit_name)}.log")
 
     try:
-        with open(log_path) as f:
-            raw_lines = f.readlines()
+        raw_lines = read_tail(log_path)
     except FileNotFoundError:
         logger.debug("log file not found: %s", log_path)
         return []
@@ -218,24 +222,10 @@ def collect_unit_logs(
             if recent:
                 recent.append(line.rstrip())
 
-    # Find indices of lines where the log level is ERROR or WARNING
-    matched_indices = [
-        i for i, line in enumerate(recent) if re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (ERROR|WARNING)\s", line)
-    ]
-
-    if not matched_indices:
-        return _cap_lines(_deduplicate_lines(_tail_lines("\n".join(recent), max_lines)), max_lines)
-
-    # Build set of indices to include: all matched lines + context around last
-    include_indices = set(matched_indices)
-    last_idx = matched_indices[-1]
-    window_start = max(0, last_idx - context_window)
-    window_end = min(len(recent) - 1, last_idx + context_window)
-    for j in range(window_start, window_end + 1):
-        include_indices.add(j)
-
-    result = [recent[i] for i in sorted(include_indices)]
-    result = result[-max_lines:] if len(result) > max_lines else result
+    # Every ERROR/WARNING line, plus a context window around the last one.
+    result = filter_error_context(
+        recent, max_lines, context_window, pattern=_JUJU_LEVEL_RE, window="last", keep_matches=True
+    )
     return _cap_lines(_deduplicate_lines(result), max_lines)
 
 
@@ -268,8 +258,7 @@ def _collect_log_files(plan_log_files: list[dict], max_lines: int) -> list[dict]
         priority = lf.get("priority", "medium")
         description = lf.get("description", "")
         try:
-            with open(path) as f:
-                lines = _cap_lines(_deduplicate_lines(_tail_lines(f.read(), max_lines)), max_lines)
+            lines = _cap_lines(_deduplicate_lines(read_tail(path)[-max_lines:]), max_lines)
             if remaining <= 0:
                 lines = []
             elif len(lines) > remaining:
@@ -363,14 +352,34 @@ def _collect_systemd_failed_detail(failed_units: list[str]) -> list[dict]:
     return [_systemd_detail(unit) for unit in failed_units[:_CAP_SYSTEMD_DETAIL]]
 
 
+def _listening_ports(ss_output: str) -> set[tuple[int, str]]:
+    """``(port, protocol)`` pairs with a listening socket in ``ss -antlup`` output.
+
+    Only the local address of a listening socket counts (``LISTEN`` for TCP,
+    ``UNCONN`` for UDP): a port seen on the peer side of an established
+    connection is not listening here.
+    """
+    listening = set()
+    for line in ss_output.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        netid, state, local = parts[0], parts[1], parts[4]
+        if (netid, state) not in (("tcp", "LISTEN"), ("udp", "UNCONN")):
+            continue
+        port = local.rsplit(":", 1)[-1]
+        if port.isdigit():
+            listening.add((int(port), netid))
+    return listening
+
+
 def _collect_network_ports(plan_ports: list[dict], ss_output: str) -> list[dict]:
+    listening_ports = _listening_ports(ss_output)
     results = []
     for port_def in plan_ports:
         port = port_def.get("port")
         protocol = port_def.get("protocol", "tcp")
-        # Match the port anchored to a colon and followed by a non-digit to
-        # avoid false positives (e.g. port 80 matching 8080 or 8000).
-        listening = bool(re.search(rf":{port}(?!\d)", ss_output)) if port else False
+        listening = (port, protocol) in listening_ports
         results.append(
             {
                 "port": port,
@@ -403,10 +412,9 @@ def _collect_health_commands(plan_health_commands: list[dict], max_lines: int = 
     for cmd_def in plan_health_commands:
         command = cmd_def.get("command", "")
         timeout = cmd_def.get("timeout_seconds", 30)
-        argv = shlex.split(command)
         try:
             result = subprocess.run(
-                argv,
+                shlex.split(command),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -460,16 +468,18 @@ def _collect_broad_ports(ss_output: str, max_lines: int) -> list[str]:
     return _cap_lines(lines, max_lines)
 
 
-def collect_ss_connections(max_lines: int = _CAP_SS) -> list[str]:
-    """Collect listening and established TCP/UDP connections with process info.
+def _ss_lines() -> list[str]:
+    """All ``ss -antlup`` lines: listening and established TCP/UDP sockets.
 
-    Hooks run as root, so no ``sudo`` is needed. This is the single ``ss``
-    collection for the whole context; the broad-ports section is derived from
-    its output rather than invoking ``ss`` again.
+    Hooks run as root, so no ``sudo`` is needed.
     """
     output = _run(["ss", "-antlup"])
-    lines = [line.rstrip() for line in output.splitlines() if line.strip()]
-    return _cap_lines(lines, max_lines)
+    return [line.rstrip() for line in output.splitlines() if line.strip()]
+
+
+def collect_ss_connections(max_lines: int = _CAP_SS) -> list[str]:
+    """Listening and established TCP/UDP connections with process info, capped."""
+    return _cap_lines(_ss_lines(), max_lines)
 
 
 def collect_firewall_rules(max_lines: int = _CAP_FIREWALL) -> dict:
@@ -512,8 +522,7 @@ def collect_charm_config(unit_name: str, max_bytes: int = _CAP_CHARM_CONFIG_BYTE
     byte cap is a safety bound against a pathological file, not a content
     judgement; charm config schema files are well under it in practice.
     """
-    tag = "unit-" + unit_name.replace("/", "-")
-    charm_dir = f"/var/lib/juju/agents/{tag}/charm"
+    charm_dir = f"/var/lib/juju/agents/{unit_tag(unit_name)}/charm"
     result = {}
     for name in ("config.yaml", "actions.yaml", "metadata.yaml"):
         path = os.path.join(charm_dir, name)
@@ -588,33 +597,42 @@ def _error_window(lines: list[str], context_window: int, max_lines: int) -> list
     case-insensitive text search, as elsewhere. Falls back to the tail when
     nothing matches.
     """
-    matches = [i for i, line in enumerate(lines) if re.search(r"error|warning", line, re.IGNORECASE)]
-    if not matches:
-        return _cap_lines(lines, max_lines)
-    last = matches[-1]
-    lo = max(0, last - context_window)
-    hi = min(len(lines), last + context_window + 1)
-    return _cap_lines(lines[lo:hi], max_lines)
+    return _cap_lines(
+        filter_error_context(lines, max_lines, context_window, window="last", keep_matches=False), max_lines
+    )
 
 
-def collect_snap_context(max_lines: int = _DEFAULT_MAX_LINES) -> dict:
+def snap_snapshot() -> dict | None:
+    """``snap list`` and ``snap services`` output, run once per collection.
+
+    Returns None on hosts without snapd. The snap sections and the journal
+    unit selection all read this one snapshot.
+    """
+    if shutil.which("snap") is None:
+        return None
+    return {"list": _run(["snap", "list"]), "services": _run(["snap", "services"])}
+
+
+def collect_snap_context(max_lines: int = _DEFAULT_MAX_LINES, snapshot: dict | None = None) -> dict:
     """Collect snap status and failed-service logs, or {} when nothing failed.
 
     Trigger is a service in the `failed` state only. Disabled and inactive
     services are not faults; they are still shown in the services table once
-    the section is triggered, as context.
+    the section is triggered, as context. ``snapshot`` is a ``snap_snapshot``
+    result; it is taken here when not given.
     """
-    if shutil.which("snap") is None:
+    snapshot = snapshot if snapshot is not None else snap_snapshot()
+    if snapshot is None:
         return {}
 
-    packages_out = _run(["snap", "list"])
-    services_out = _run(["snap", "services"])
-    changes_out = _run(["snap", "changes"])
+    packages_out = snapshot["list"]
+    services_out = snapshot["services"]
 
     services = _snap_services(services_out)
     failed = [svc for svc in services if svc["current"] == "failed"]
     if not failed:
         return {}
+    changes_out = _run(["snap", "changes"])
 
     failed_snaps = {svc["snap"] for svc in failed}
     fetch_cap = max(max_lines * 4, 200)
@@ -636,7 +654,7 @@ def collect_snap_context(max_lines: int = _DEFAULT_MAX_LINES) -> dict:
     }
 
 
-def collect_snap_list(max_lines: int = _DEFAULT_MAX_LINES) -> list[str]:
+def collect_snap_list(max_lines: int = _DEFAULT_MAX_LINES, snapshot: dict | None = None) -> list[str]:
     """Always-on snap inventory (``snap list``), or [] on hosts without snapd.
 
     Unlike ``collect_snap_context`` this is not gated on a failed service: the
@@ -644,9 +662,10 @@ def collect_snap_list(max_lines: int = _DEFAULT_MAX_LINES) -> list[str]:
     runtimes are present. The header/separator rows are dropped; rows are
     otherwise kept verbatim (``Name  Version  Rev  Tracking  Publisher``).
     """
-    if shutil.which("snap") is None:
+    snapshot = snapshot if snapshot is not None else snap_snapshot()
+    if snapshot is None:
         return []
-    out = _run(["snap", "list"])
+    out = snapshot["list"]
     if not out:
         return []
     lines = [ln for ln in out.splitlines() if ln.strip()]
@@ -663,7 +682,7 @@ def _systemd_unit_name(unit: str) -> str:
     return unit
 
 
-def _journal_units(diagnostics_plan: dict | None, systemd_failed: list[str]) -> list[str]:
+def _journal_units(diagnostics_plan: dict | None, systemd_failed: list[str], snapshot: dict | None = None) -> list[str]:
     """Relevant systemd units for journalctl, bounded.
 
     Union of: plan-listed ``systemd_units``, failed systemd units, and the
@@ -678,8 +697,8 @@ def _journal_units(diagnostics_plan: dict | None, systemd_failed: list[str]) -> 
             units.append(_systemd_unit_name(unit))
     for unit in systemd_failed[:_CAP_JOURNAL_UNITS]:
         units.append(_systemd_unit_name(unit))
-    if shutil.which("snap") is not None:
-        for svc in _snap_services(_run(["snap", "services"]))[:_CAP_JOURNAL_UNITS]:
+    if snapshot is not None:
+        for svc in _snap_services(snapshot["services"])[:_CAP_JOURNAL_UNITS]:
             units.append(f"snap.{svc['service']}.service")
 
     seen: set[str] = set()
@@ -701,19 +720,18 @@ def collect_journal_errors(
     """Bounded journalctl sample: errors and warnings for the relevant units.
 
     Only ``warning`` priority and above are kept, anchored to the incident
-    window the same way ``collect_unit_logs`` is: ``from_time - buffer_minutes``
-    when provided, hard-capped by ``log_window_minutes``. Returns [] when
-    journalctl is unavailable, no units are given, or nothing matched.
+    window the same way ``collect_unit_logs`` is: from ``from_time -
+    buffer_minutes`` when provided, else the last ``log_window_minutes``. At
+    most ``_CAP_JOURNAL_FETCH`` of the latest lines are fetched. Returns []
+    when journalctl is unavailable, no units are given, or nothing matched.
     """
     if not units or shutil.which("journalctl") is None:
         return []
-    now = datetime.datetime.now(datetime.timezone.utc)
-    earliest_allowed = now - datetime.timedelta(minutes=log_window_minutes)
     if from_time is not None:
         cutoff = from_time - datetime.timedelta(minutes=buffer_minutes)
-        cutoff = max(cutoff, earliest_allowed)
     else:
-        cutoff = earliest_allowed
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=log_window_minutes)
+    cutoff = cutoff.astimezone(datetime.timezone.utc)
 
     cmd = [
         "journalctl",
@@ -721,9 +739,11 @@ def collect_journal_errors(
         "-o",
         "short-iso",
         "--since",
-        cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+        cutoff.strftime("%Y-%m-%d %H:%M:%S UTC"),
         "-p",
         "warning",
+        "-n",
+        str(_CAP_JOURNAL_FETCH),
     ]
     for unit in units:
         cmd += ["--unit", unit]
@@ -766,12 +786,13 @@ def collect_context(
     judgements: the bounded evidence is kept in the report, and the prompt
     projection (4.10) decides what the model sees.
     """
-    # One ss collection for the whole context; the broad network fallback is
-    # derived from it rather than invoking ss a second time.
-    ss_lines = collect_ss_connections(max_lines)
-    ss_text = "\n".join(ss_lines)
+    # One ss collection for the whole context. The port checks read all of
+    # it, so a busy host cannot push listening sockets out of a capped view;
+    # only the rendered section is capped.
+    ss_text = "\n".join(_ss_lines())
 
     systemd_failed = collect_systemd_failed()
+    snapshot = snap_snapshot()
 
     context = {
         "unit_logs": collect_unit_logs(
@@ -789,18 +810,18 @@ def collect_context(
         "charm_config": collect_charm_config(unit_name),
         "disk_usage": collect_disk_usage(_CAP_DISK),
         "memory_summary": collect_memory_summary(_CAP_MEMORY),
-        "ss_connections": ss_lines,
+        "ss_connections": _cap_lines(ss_text.splitlines(), max_lines),
         "firewall_rules": collect_firewall_rules(_CAP_FIREWALL),
         "systemd_failed": systemd_failed,
         "systemd_failed_detail": _collect_systemd_failed_detail(systemd_failed),
-        "snap": collect_snap_context(max_lines),
-        "snap_list": collect_snap_list(max_lines),
+        "snap": collect_snap_context(max_lines, snapshot),
+        "snap_list": collect_snap_list(max_lines, snapshot),
         "journal": collect_journal_errors(
             max_lines,
             from_time=from_time,
             log_window_minutes=log_window_minutes,
             buffer_minutes=buffer_minutes,
-            units=_journal_units(diagnostics_plan, systemd_failed),
+            units=_journal_units(diagnostics_plan, systemd_failed, snapshot),
         ),
         "collected_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }

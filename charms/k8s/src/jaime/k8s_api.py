@@ -147,7 +147,7 @@ class K8sApiClient:
         if previous:
             params["previous"] = "true"
         if since_time:
-            params["sinceTime"] = since_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["sinceTime"] = since_time.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         path = f"/api/v1/namespaces/{self.namespace}/pods/{pod_name}/log"
         result = self._request(path, params)
         if not isinstance(result, str):

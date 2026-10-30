@@ -272,6 +272,22 @@ def render_report(
     return redact_text("\n".join(lines))
 
 
+def report_path(report_dir: str, file_name: str) -> str:
+    """Path of a report file, falling back to the default report directory."""
+    return os.path.join(report_dir or _DEFAULT_REPORT_DIR, file_name)
+
+
+def _version_file_name(report_dir: str, incident_id: str) -> str:
+    """A fresh ``<incident-id>-<UTC timestamp>.md`` name that is not taken yet."""
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    name = f"{incident_id}-{stamp}.md"
+    suffix = 1
+    while os.path.exists(os.path.join(report_dir, name)):
+        name = f"{incident_id}-{stamp}-{suffix}.md"
+        suffix += 1
+    return name
+
+
 def generate_report(
     incident_id: str,
     unit_name: str,
@@ -280,17 +296,22 @@ def generate_report(
     context: dict,
     report_dir: str = "",
     status_message: str = "",
+    versioned: bool = False,
 ) -> str:
     """Generate a Markdown context report and write it to disk.
 
-    Falls back to _DEFAULT_REPORT_DIR if report_dir is empty.
+    Falls back to _DEFAULT_REPORT_DIR if report_dir is empty. The first report
+    of an incident is ``<incident-id>.md``; with ``versioned`` a new
+    ``<incident-id>-<UTC timestamp>.md`` is written instead, so an earlier
+    version, and the AI answers based on it, is never overwritten.
     Returns the path of the written report file.
     """
     content = render_report(incident_id, unit_name, workload, first_seen, context, status_message)
 
     report_dir = report_dir or _DEFAULT_REPORT_DIR
     os.makedirs(report_dir, exist_ok=True)
-    report_path = os.path.join(report_dir, f"{incident_id}.md")
+    name = _version_file_name(report_dir, incident_id) if versioned else f"{incident_id}.md"
+    report_path = os.path.join(report_dir, name)
     with open(report_path, "w") as f:
         f.write(content)
 

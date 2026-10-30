@@ -57,9 +57,9 @@ list-suggestions:
   results:
     result:
       type: string
-      description: "JSON array of turns: incident_id, unit, turn_id, question, generated_at, description."
+      description: "JSON array of turns: incident_id, unit, turn_id, question, generated_at, report_file, description."
 generate-report:
-  description: "Generate and return a Markdown report for the current open incident."
+  description: "Collect fresh context and write a new report version for the current open incident (<incident-id>-<UTC timestamp>.md). Earlier versions are never overwritten; the new one becomes the report ask and get-suggestion use. Fails if no incident is open."
   params: {}
 reset:
   description: "Clear all tracked incidents and status state."

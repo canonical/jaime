@@ -192,3 +192,46 @@ class TestListIncidents:
         path = str(tmp_path / "events.jsonl")
         _write(path, {"event": "other", "unit": "a/0", "timestamp": "t"})
         assert list_incidents(path) == []
+
+
+class TestSizeRotation:
+    def _start(self, path, incident_id, unit="pg/0"):
+        write_event(
+            {"event": "incident-start", "incident_id": incident_id, "unit": unit, "timestamp": incident_id}, path
+        )
+
+    def test_rotates_at_size_and_keeps_bounded_archives(self, tmp_path, monkeypatch):
+        import jaime.logging as jlog
+
+        monkeypatch.setattr(jlog, "MAX_AUDIT_BYTES", 1)
+        path = str(tmp_path / "events.jsonl")
+        for n in range(jlog.MAX_AUDIT_ARCHIVES + 3):
+            self._start(path, f"inc-{n}")
+        archives = sorted(p.name for p in tmp_path.iterdir() if p.name != "events.jsonl")
+        assert archives == [f"events.jsonl.{n}" for n in range(1, jlog.MAX_AUDIT_ARCHIVES + 1)]
+
+    def test_list_incidents_reads_archives(self, tmp_path, monkeypatch):
+        import jaime.logging as jlog
+
+        monkeypatch.setattr(jlog, "MAX_AUDIT_BYTES", 1)
+        path = str(tmp_path / "events.jsonl")
+        self._start(path, "inc-a")
+        write_event({"event": "incident-closed", "incident_id": "inc-a", "unit": "pg/0", "closed_at": "x"}, path)
+        self._start(path, "inc-b")
+        records = {r["incident_id"]: r for r in list_incidents(path)}
+        assert records["inc-a"]["status"] == "closed"
+        assert records["inc-a"]["opened_at"] == "inc-a"
+        assert records["inc-b"]["status"] == "open"
+
+    def test_reset_rotation_moves_numbered_archives_aside(self, tmp_path, monkeypatch):
+        import jaime.logging as jlog
+
+        monkeypatch.setattr(jlog, "MAX_AUDIT_BYTES", 1)
+        path = str(tmp_path / "events.jsonl")
+        self._start(path, "inc-a")
+        self._start(path, "inc-b")
+        assert os.path.exists(path + ".1")
+        archive = rotate_audit_log(path)
+        assert not os.path.exists(path + ".1")
+        assert os.path.exists(archive + ".1")
+        assert list_incidents(path) == []

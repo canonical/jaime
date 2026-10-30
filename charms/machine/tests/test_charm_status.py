@@ -1,4 +1,4 @@
-"""Unit tests for _log_principal_status in JaimeCharm."""
+"""Unit tests for principal status monitoring in JaimeCharm."""
 
 import datetime
 import json
@@ -66,8 +66,11 @@ def make_harness(tmp_path, config_overrides=None):
     return h
 
 
-def call_log_status(harness, goal_relations, now):
-    """Call _log_principal_status with mocked goal_state and datetime."""
+def call_log_status(harness, goal_relations, now, report_calls=None):
+    """Observe the principal once, with mocked goal_state and clock.
+
+    ``report_calls``, when given, receives the ``generate_report`` calls.
+    """
     gs = mock.MagicMock()
     gs.relations = {"principal": goal_relations}
 
@@ -88,21 +91,15 @@ def call_log_status(harness, goal_relations, now):
     try:
         with (
             mock.patch("charm.goal_state", return_value=gs),
-            mock.patch("charm.datetime") as mock_dt,
-            mock.patch("jaime.core.datetime") as core_dt,
+            mock.patch("jaime.core.utc_now", return_value=now),
             mock.patch("charm.collect_context", return_value={}),
-            mock.patch("jaime.core.generate_report", return_value="/tmp/test-report.md"),
-            mock.patch("charm.write_event"),
+            mock.patch("jaime.core.generate_report", return_value="/tmp/test-report.md") as gen,
             mock.patch("jaime.core.write_event"),
             mock.patch("builtins.open", mock.mock_open(read_data="report content")),
         ):
-            mock_dt.datetime.now.return_value = now
-            mock_dt.datetime.fromisoformat = datetime.datetime.fromisoformat
-            mock_dt.timezone.utc = datetime.timezone.utc
-            core_dt.datetime.now.return_value = now
-            core_dt.datetime.fromisoformat = datetime.datetime.fromisoformat
-            core_dt.timezone.utc = datetime.timezone.utc
-            harness.charm._log_principal_status()
+            harness.charm._process_units(harness.charm._principal_observations())
+            if report_calls is not None:
+                report_calls.extend(gen.call_args_list)
     finally:
         charm_logger.removeHandler(handler)
         core_logger.removeHandler(handler)
@@ -309,14 +306,30 @@ class TestCooldown:
         assert "cooldown_elapsed_minutes" in entry
         assert "cooldown_minutes" in entry
 
-    def test_second_incident_fires_after_cooldown(self, tmp_path):
+    def test_report_refreshed_for_same_incident_after_cooldown(self, tmp_path):
+        """After cooldown the incident is kept and a new report version written."""
         h = make_harness(tmp_path)
         first_now = SINCE + datetime.timedelta(minutes=10)
         call_log_status(h, make_goal_relations("blocked"), first_now)
+        incident_id = h.charm._status_tracker.current_incident("postgresql/0")["id"]
 
         second_now = SINCE + datetime.timedelta(minutes=45)
-        records = call_log_status(h, make_goal_relations("blocked"), second_now)
-        assert any(_is_incident_opened(r) for r in records)
+        calls = []
+        records = call_log_status(h, make_goal_relations("blocked"), second_now, report_calls=calls)
+
+        assert not any(_is_incident_opened(r) for r in records)
+        assert len(calls) == 1
+        assert calls[0].kwargs["incident_id"] == incident_id
+        assert calls[0].kwargs["versioned"] is True
+        assert h.charm._status_tracker.current_incident("postgresql/0")["id"] == incident_id
+        assert h.charm._status_tracker.last_reported("postgresql/0") == second_now.isoformat()
+
+    def test_refresh_makes_no_ai_call(self, tmp_path):
+        h = make_harness(tmp_path)
+        call_log_status(h, make_goal_relations("blocked"), SINCE + datetime.timedelta(minutes=10))
+        with mock.patch.object(JaimeCharm, "_run_mode_logic") as run:
+            call_log_status(h, make_goal_relations("blocked"), SINCE + datetime.timedelta(minutes=45))
+        run.assert_not_called()
 
 
 class TestRecovery:
@@ -335,8 +348,8 @@ class TestRecovery:
         assert entry["unit"] == "postgresql/0"
         assert entry["workload"] == "active"
 
-    def test_new_episode_same_status_clears_cooldown(self, tmp_path):
-        """Same status string but new since → new episode → cooldown cleared."""
+    def test_since_bump_keeps_incident_and_refreshes_after_cooldown(self, tmp_path):
+        """Same status, new since: same episode, so the incident is kept and refreshed."""
         h = make_harness(tmp_path)
         since_1 = SINCE
         since_2 = SINCE + datetime.timedelta(hours=1)
@@ -349,9 +362,23 @@ class TestRecovery:
         )
 
         now_2 = since_2 + datetime.timedelta(minutes=10)
-        records = call_log_status(h, make_goal_relations("blocked", since=since_2), now_2)
+        calls = []
+        records = call_log_status(h, make_goal_relations("blocked", since=since_2), now_2, report_calls=calls)
+        assert not any(_is_incident_opened(r) for r in records)
+        assert h.charm._status_tracker.current_incident("postgresql/0")["id"] == "test-uuid"
+        assert [c.kwargs["incident_id"] for c in calls] == ["test-uuid"]
+
+    def test_new_episode_after_recovery_opens_new_incident(self, tmp_path):
+        h = make_harness(tmp_path)
+        call_log_status(h, make_goal_relations("blocked"), SINCE + datetime.timedelta(minutes=10))
+        first_id = h.charm._status_tracker.current_incident("postgresql/0")["id"]
+
+        recovered = SINCE + datetime.timedelta(minutes=12)
+        call_log_status(h, make_goal_relations("active", since=recovered), recovered)
+        broke = SINCE + datetime.timedelta(minutes=13)
+        records = call_log_status(h, make_goal_relations("blocked", since=broke), broke + datetime.timedelta(minutes=6))
         assert any(_is_incident_opened(r) for r in records)
-        assert not any("cooldown active" in r.getMessage() for r in records)
+        assert h.charm._status_tracker.current_incident("postgresql/0")["id"] != first_id
 
     def test_recovery_resets_increment_to_one(self, tmp_path):
         h = make_harness(tmp_path)
@@ -444,8 +471,8 @@ class TestGoalStateError:
         charm_logger.addHandler(handler)
         charm_logger.setLevel(logging.WARNING)
         try:
-            with mock.patch("ops.hookcmds.goal_state", side_effect=RuntimeError("socket error")):
-                h.charm._log_principal_status()
+            with mock.patch("charm.goal_state", side_effect=RuntimeError("socket error")):
+                assert h.charm._principal_observations() == []
         finally:
             charm_logger.removeHandler(handler)
 
@@ -610,7 +637,7 @@ class TestCollectContextAction:
         event = mock.MagicMock()
 
         with (
-            mock.patch.object(JaimeCharm, "_collect_report_context", return_value={"unit_logs": ["line"]}),
+            mock.patch.object(JaimeCharm, "_collect_context", return_value={"unit_logs": ["line"]}),
             mock.patch.object(JaimeCharm, "_principal_unit_name", return_value="ubuntu/0"),
         ):
             h.charm._on_action_collect_context(event)
@@ -628,3 +655,49 @@ class TestCollectContextAction:
             h.charm._on_action_collect_context(event)
         event.fail.assert_called_once()
         event.set_results.assert_not_called()
+
+
+class TestDiagnosticsOnConfigChanged:
+    PLAN = json.dumps(
+        {
+            "principal_name": "postgresql",
+            "monitoring_plan": {"log_files": [], "processes": [], "env_variables": [], "network": {"ports": []}},
+        }
+    )
+
+    def _harness(self, tmp_path):
+        h = make_harness(tmp_path)
+        h.charm._diagnostics_path = str(tmp_path / "diagnostics.json")
+        return h
+
+    def test_operator_plan_applied_without_rejoin(self, tmp_path):
+        h = self._harness(tmp_path)
+        h.update_config({"diagnostics": self.PLAN})
+        with open(tmp_path / "diagnostics.json") as f:
+            assert json.load(f)["principal_name"] == "postgresql"
+        assert h.charm._stored.diagnostics_from_config is True
+
+    def test_invalid_operator_plan_blocks(self, tmp_path):
+        from ops.model import BlockedStatus
+
+        h = self._harness(tmp_path)
+        h.update_config({"diagnostics": "{not json"})
+        assert isinstance(h.charm.unit.status, BlockedStatus)
+        assert "invalid diagnostics config" in h.charm.unit.status.message
+
+    def test_clearing_the_option_regenerates(self, tmp_path):
+        h = self._harness(tmp_path)
+        h.update_config({"diagnostics": self.PLAN})
+        with (
+            mock.patch.object(JaimeCharm, "_get_principal_name", return_value="postgresql"),
+            mock.patch.object(JaimeCharm, "_generate_diagnostics") as generate,
+        ):
+            h.update_config({"diagnostics": ""})
+        generate.assert_called_once()
+        assert h.charm._stored.diagnostics_from_config is False
+
+    def test_unrelated_change_never_generates(self, tmp_path):
+        h = self._harness(tmp_path)
+        with mock.patch.object(JaimeCharm, "_generate_diagnostics") as generate:
+            h.update_config({"cooldown-minutes": 45})
+        generate.assert_not_called()

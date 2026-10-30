@@ -362,7 +362,7 @@ class TestDiagnosticsConfig:
     def test_invalid_json_blocks_with_event(self):
         h = _make_harness({"diagnostics": "{not json"})
         with (
-            mock.patch("charm.write_event") as mock_event,
+            mock.patch("jaime.core.write_event") as mock_event,
             mock.patch.object(h.charm, "_prerequisite_error", return_value=None),
         ):
             h.charm._on_config_changed(mock.MagicMock())
@@ -372,7 +372,7 @@ class TestDiagnosticsConfig:
 
     def test_invalid_schema_blocks(self):
         h = _make_harness({"diagnostics": '{"app": {"bogus": []}}'})
-        with mock.patch("charm.write_event"), mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
+        with mock.patch("jaime.core.write_event"), mock.patch.object(h.charm, "_prerequisite_error", return_value=None):
             h.charm._on_config_changed(mock.MagicMock())
         assert isinstance(h.charm.unit.status, BlockedStatus)
         assert "unknown keys" in h.charm.unit.status.message

@@ -4,7 +4,7 @@ requires-python = ">=3.10"
 
 [[package]]
 name = "jaime"
-version = "0.0.7"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "ops" },
@@ -13,7 +13,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ops", specifier = ">=2.10.0" },
+    { name = "ops", specifier = ">=3.4.0" },
     { name = "websocket-client", specifier = ">=1.0" },
 ]
 

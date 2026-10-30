@@ -1058,3 +1058,14 @@ class TestCharmConfigSection:
 
     def test_no_section_without_any_config_data(self):
         assert "## Charm config" not in self._render({})
+
+
+class TestReportVersions:
+    def test_versioned_report_never_overwrites(self, tmp_path):
+        first = generate_report("inc", "pg/0", "blocked", "", {}, report_dir=str(tmp_path))
+        second = generate_report("inc", "pg/0", "blocked", "", {}, report_dir=str(tmp_path), versioned=True)
+        third = generate_report("inc", "pg/0", "blocked", "", {}, report_dir=str(tmp_path), versioned=True)
+        assert os.path.basename(first) == "inc.md"
+        assert len({first, second, third}) == 3
+        assert os.path.basename(second).startswith("inc-")
+        assert all(os.path.exists(p) for p in (first, second, third))

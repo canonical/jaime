@@ -9,6 +9,13 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_STATE_PATH = "/var/lib/jaime/status-state.json"
 
+# Usage entries kept per unit. Older entries are folded into per-model totals
+# (``usage_folded``) so the state file stays bounded and totals stay exact.
+MAX_USAGE_ENTRIES = 200
+
+# Per-model counters kept by a folded usage total.
+_USAGE_COUNTERS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
 
 class StatusTracker:
     """Persist per-unit status observations across hook invocations.
@@ -42,11 +49,17 @@ class StatusTracker:
         }
 
     Each ``usage_log`` entry is one raw LLM call record — one entry per
-    ``run_suggest`` or ``run_act`` invocation. The ``cost_usd`` field is
-    absent when the provider does not report cost (e.g. Gemini).
+    ``run_suggest`` or ``run_ask`` invocation. The ``cost_usd`` field is
+    absent when the provider does not report cost (e.g. Gemini). Only the
+    newest ``MAX_USAGE_ENTRIES`` are kept; older ones are folded into
+    ``usage_folded``, a per-model total of calls, tokens and cost.
+
+    ``ai_error`` is the reason the last automatic AI call for the open
+    incident failed, kept so the unit stays blocked on it while the incident
+    is in cooldown. It is cleared by a successful turn or a new episode.
 
     The per-model breakdown returned by ``show-usage`` is computed on the
-    fly by ``JaimeCharm._summarise_usage`` and is not stored here.
+    fly by ``jaime.actions.summarise_usage`` and is not stored here.
 
     ``since`` is Juju's own "status last set" timestamp and is recorded for
     reporting only. ``unhealthy_since`` is Jaime's anchor for how long the
@@ -86,10 +99,13 @@ class StatusTracker:
         try:
             dir_path = os.path.dirname(self._path)
             os.makedirs(dir_path, exist_ok=True)
-            # Write to a temp file in the same directory then rename atomically
-            # to avoid leaving a truncated state file if the process is killed.
+            # Write to a temp file in the same directory, flush it to disk, then
+            # rename atomically, so neither a killed process nor a power loss
+            # leaves a truncated or empty state file.
             with tempfile.NamedTemporaryFile("w", dir=dir_path, delete=False, suffix=".tmp") as tmp:
                 json.dump(self._state, tmp)
+                tmp.flush()
+                os.fsync(tmp.fileno())
                 tmp_path = tmp.name
             os.rename(tmp_path, self._path)
         except (OSError, TypeError, ValueError) as e:
@@ -131,6 +147,8 @@ class StatusTracker:
             "message": message,
             "usage_log": previous.get("usage_log", []),
         }
+        if previous.get("usage_folded"):
+            entry["usage_folded"] = previous["usage_folded"]
         if new_episode:
             entry["increment"] = 1
             entry["unhealthy_since"] = since if watched else None
@@ -139,6 +157,8 @@ class StatusTracker:
             entry["unhealthy_since"] = previous.get("unhealthy_since")
             entry["incident"] = previous.get("incident")
             entry["last_reported"] = previous.get("last_reported")
+            if previous.get("ai_error"):
+                entry["ai_error"] = previous["ai_error"]
 
         self._state[unit] = entry
         # Always persist: each hook is a fresh process, so an in-memory-only
@@ -170,22 +190,53 @@ class StatusTracker:
             self._state[unit]["incident"] = incident_dict
             self._save()
 
+    def set_ai_error(self, unit: str, message: str) -> None:
+        """Record (or, with an empty message, clear) the last AI failure."""
+        if unit not in self._state:
+            return
+        if message:
+            self._state[unit]["ai_error"] = message
+        elif not self._state[unit].pop("ai_error", None):
+            return
+        self._save()
+
+    def ai_error(self, unit: str) -> str:
+        """The reason the last automatic AI call for the unit failed, or ''."""
+        return self._state.get(unit, {}).get("ai_error", "")
+
     def record_usage(self, unit: str, usage_entry: dict) -> None:
-        """Append a token usage entry to the usage log for a unit."""
-        if unit in self._state:
-            self._state[unit].setdefault("usage_log", []).append(usage_entry)
-            self._save()
+        """Append a token usage entry, folding the oldest beyond the cap."""
+        if unit not in self._state:
+            return
+        state = self._state[unit]
+        log = state.setdefault("usage_log", [])
+        log.append(usage_entry)
+        if len(log) > MAX_USAGE_ENTRIES:
+            overflow = log[: len(log) - MAX_USAGE_ENTRIES]
+            del log[: len(overflow)]
+            folded = state.setdefault("usage_folded", {})
+            for old in overflow:
+                _fold_usage(folded, old)
+        self._save()
 
     def usage_log(self, unit: str) -> list[dict]:
-        """Return all usage log entries for a unit."""
+        """Return the retained usage log entries for a unit."""
         return self._state.get(unit, {}).get("usage_log", [])
 
     def all_usage_log(self) -> list[dict]:
-        """Return all usage log entries across all units."""
+        """Return the retained usage log entries across all units."""
         entries = []
         for entry in self._state.values():
             entries.extend(entry.get("usage_log", []))
         return entries
+
+    def folded_usage(self) -> dict[str, dict]:
+        """Per-model totals of the usage entries folded out of every unit's log."""
+        total: dict[str, dict] = {}
+        for entry in self._state.values():
+            for model, counts in (entry.get("usage_folded") or {}).items():
+                _merge_folded(total, model, counts)
+        return total
 
     def units(self) -> list[str]:
         """Names of every tracked unit."""
@@ -234,3 +285,22 @@ class StatusTracker:
         """Clear all tracked state and persist the empty state file."""
         self._state = {}
         self._save()
+
+
+def _fold_usage(folded: dict, entry: dict) -> None:
+    """Add one usage entry to a per-model folded total."""
+    _merge_folded(
+        folded,
+        entry.get("model") or "unknown",
+        {"calls": 1, **{k: entry.get(k, 0) for k in _USAGE_COUNTERS}, "cost_usd": entry.get("cost_usd")},
+    )
+
+
+def _merge_folded(folded: dict, model: str, counts: dict) -> None:
+    """Add a per-model count record into ``folded[model]``."""
+    target = folded.setdefault(model, {"calls": 0, **{k: 0 for k in _USAGE_COUNTERS}, "cost_usd": None})
+    target["calls"] += counts.get("calls", 0)
+    for key in _USAGE_COUNTERS:
+        target[key] += counts.get(key, 0)
+    if counts.get("cost_usd") is not None:
+        target["cost_usd"] = (target["cost_usd"] or 0.0) + counts["cost_usd"]

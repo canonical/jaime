@@ -6,7 +6,6 @@ import unittest.mock as mock
 
 import jaime.collector as jcollector
 from jaime.collector import (
-    _tail_lines,
     collect_context,
     collect_disk_usage,
     collect_memory_summary,
@@ -24,7 +23,8 @@ def _no_background_io():
         collect_snap_list=mock.MagicMock(return_value=[]),
         collect_journal_errors=mock.MagicMock(return_value=[]),
         _journal_units=mock.MagicMock(return_value=[]),
-        collect_ss_connections=mock.MagicMock(return_value=[]),
+        _ss_lines=mock.MagicMock(return_value=[]),
+        snap_snapshot=mock.MagicMock(return_value=None),
         collect_firewall_rules=mock.MagicMock(return_value={}),
         collect_charm_config=mock.MagicMock(return_value={}),
         _collect_systemd_failed_detail=mock.MagicMock(return_value=[]),
@@ -72,20 +72,6 @@ def _make_tracing_payload(events: list[tuple[str, str, str]], ts_ns: int) -> byt
         ]
     }
     return json.dumps(payload).encode()
-
-
-class TestTailLines:
-    def test_returns_all_lines_when_under_limit(self):
-        lines = ["a", "b", "c"]
-        assert _tail_lines("\n".join(lines), 10) == lines
-
-    def test_returns_last_n_lines_when_over_limit(self):
-        lines = [str(i) for i in range(20)]
-        result = _tail_lines("\n".join(lines), 5)
-        assert result == lines[-5:]
-
-    def test_empty_string_returns_empty(self):
-        assert _tail_lines("", 10) == []
 
 
 class TestCollectUnitLogs:
@@ -374,7 +360,8 @@ class TestCollectContext:
             mock.patch("jaime.collector.collect_snap_list", return_value=[]),
             mock.patch("jaime.collector.collect_journal_errors", return_value=[]),
             mock.patch("jaime.collector._journal_units", return_value=[]),
-            mock.patch("jaime.collector.collect_ss_connections", return_value=[]),
+            mock.patch("jaime.collector._ss_lines", return_value=[]),
+            mock.patch("jaime.collector.snap_snapshot", return_value=None),
             mock.patch("jaime.collector.collect_firewall_rules", return_value={}),
             mock.patch("jaime.collector._collect_systemd_failed_detail", return_value=[]),
             mock.patch("jaime.collector.collect_unit_logs", return_value=[]),
@@ -939,11 +926,8 @@ class TestJournalUnits:
     def test_union_of_plan_failed_and_snap(self):
         plan = {"monitoring_plan": {"systemd_units": ["postgresql", "vault.service"]}}
         services_out = "Service  Startup  Current  Notes\ncharmed-postgresql.patroni  enabled  active  -\n"
-        with (
-            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
-            mock.patch("jaime.collector._run", return_value=services_out),
-        ):
-            units = jcollector._journal_units(plan, ["fail.service"])
+        snapshot = {"list": "", "services": services_out}
+        units = jcollector._journal_units(plan, ["fail.service"], snapshot)
         assert "postgresql.service" in units
         assert "vault.service" in units
         assert "fail.service" in units
@@ -973,3 +957,87 @@ class TestCollectJournalErrors:
 
     def test_empty_without_units(self):
         assert jcollector.collect_journal_errors(units=[]) == []
+
+
+class TestListeningPorts:
+    SS = "\n".join(
+        [
+            "Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process",
+            "tcp   LISTEN 0      128    0.0.0.0:22         0.0.0.0:*",
+            "tcp   ESTAB  0      0      10.0.0.5:41234     10.0.0.9:5432",
+            "udp   UNCONN 0      0      0.0.0.0:53         0.0.0.0:*",
+            "tcp   LISTEN 0      128    [::]:8080          [::]:*",
+        ]
+    )
+
+    def test_peer_port_of_an_established_connection_is_not_listening(self):
+        result = jcollector._collect_network_ports([{"port": 5432, "protocol": "tcp"}], self.SS)
+        assert result[0]["status"] == "not_listening"
+
+    def test_protocol_must_match(self):
+        result = jcollector._collect_network_ports(
+            [{"port": 53, "protocol": "udp"}, {"port": 53, "protocol": "tcp"}, {"port": 8080, "protocol": "tcp"}],
+            self.SS,
+        )
+        assert [r["status"] for r in result] == ["listening", "not_listening", "listening"]
+
+    def test_checks_use_uncapped_ss_output(self):
+        listen = "tcp LISTEN 0 128 0.0.0.0:5432 0.0.0.0:*"
+        established = [f"tcp ESTAB 0 0 10.0.0.5:{40000 + i} 10.0.0.9:443" for i in range(50)]
+        plan = {
+            "principal_name": "pg",
+            "monitoring_plan": {"network": {"ports": [{"port": 5432, "protocol": "tcp"}]}},
+        }
+        with (
+            _no_background_io(),
+            mock.patch("jaime.collector._ss_lines", return_value=[listen, *established]),
+            mock.patch("jaime.collector.collect_unit_logs", return_value=[]),
+            mock.patch("jaime.collector.collect_tracing_events", return_value=[]),
+            mock.patch("jaime.collector._run", return_value=""),
+        ):
+            ctx = collect_context("pg/0", max_lines=10, diagnostics_plan=plan)
+        assert ctx["plan_results"]["network_ports"]["items"][0]["status"] == "listening"
+        assert len(ctx["ss_connections"]) == 10
+
+
+class TestMalformedHealthCommand:
+    def test_unbalanced_quote_is_reported_not_raised(self):
+        result = jcollector._collect_health_commands([{"command": 'echo "unterminated', "timeout_seconds": 1}])
+        assert result[0]["returncode"] == -1
+        assert "quotation" in result[0]["stderr"]
+
+
+class TestSnapSnapshot:
+    def test_snap_list_and_services_run_once_per_collection(self):
+        calls = []
+
+        def fake_run(cmd, timeout=10):
+            calls.append(cmd)
+            return ""
+
+        with (
+            mock.patch("jaime.collector.shutil.which", return_value="/usr/bin/snap"),
+            mock.patch("jaime.collector._run", side_effect=fake_run),
+            mock.patch("jaime.collector.collect_unit_logs", return_value=[]),
+            mock.patch("jaime.collector.collect_tracing_events", return_value=[]),
+            mock.patch("jaime.collector.collect_charm_config", return_value={}),
+        ):
+            collect_context("pg/0")
+        assert calls.count(["snap", "list"]) == 1
+        assert calls.count(["snap", "services"]) == 1
+
+
+class TestUnitLogsReadFromTail:
+    def test_only_the_tail_of_a_large_log_is_read(self, tmp_path):
+        log_file = tmp_path / "unit-postgresql-0.log"
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        log_file.write_text("".join(f"{now} ERROR early {i}\n" for i in range(1000)) + f"{now} ERROR last\n")
+        from jaime.logutils import read_tail
+
+        with (
+            mock.patch.object(jcollector, "_JUJU_LOG_DIR", str(tmp_path)),
+            mock.patch("jaime.collector.read_tail", lambda path: read_tail(path, max_bytes=200)),
+        ):
+            result = collect_unit_logs("postgresql/0", log_window_minutes=60)
+        assert any("ERROR last" in line for line in result)
+        assert not any("early 0 " in line or line.endswith("early 0") for line in result)

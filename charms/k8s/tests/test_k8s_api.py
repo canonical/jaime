@@ -82,6 +82,20 @@ class TestK8sApiClient:
             client.get_pod_logs("app-0", since_time=since)
         assert captured["params"]["sinceTime"] == "2026-08-18T10:00:00Z"
 
+    def test_get_pod_logs_since_time_converted_to_utc(self):
+        client = _make_client()
+        captured = {}
+
+        def fake_request(path, params=None):
+            captured["params"] = params
+            return ""
+
+        cest = datetime.timezone(datetime.timedelta(hours=2))
+        since = datetime.datetime(2026, 8, 18, 12, 0, 0, tzinfo=cest)
+        with mock.patch.object(client, "_request", side_effect=fake_request):
+            client.get_pod_logs("app-0", since_time=since)
+        assert captured["params"]["sinceTime"] == "2026-08-18T10:00:00Z"
+
     def test_get_pod_logs_empty_on_error(self):
         client = _make_client()
         with mock.patch.object(client, "_request", return_value=None):
@@ -301,6 +315,18 @@ _POD = {
 
 
 class TestCollectContext:
+    def test_log_window_applies_without_an_incident_start(self):
+        with mock.patch("jaime.collector.K8sApiClient") as mock_cls:
+            client = mock_cls.return_value
+            client.get_pod_for_unit.return_value = _POD
+            client.get_pod_logs.return_value = []
+            client.get_pod_events.return_value = []
+            client.get_resource_usage.return_value = []
+            before = datetime.datetime.now(datetime.timezone.utc)
+            collect_context("postgresql-k8s/0", log_window_minutes=30)
+        since = client.get_pod_logs.call_args_list[0].kwargs["since_time"]
+        assert abs((before - since).total_seconds() - 1800) < 60
+
     def test_returns_all_sections(self):
         with mock.patch("jaime.collector.K8sApiClient") as mock_cls:
             client = mock_cls.return_value

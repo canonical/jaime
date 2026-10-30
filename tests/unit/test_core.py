@@ -696,7 +696,7 @@ class TestAskAction:
         h, inc = self._setup(tmp_path)
         h.charm._status_tracker._state["postgresql/0"]["incident"] = (
             Incident.from_dict(h.charm._status_tracker._state["postgresql/0"]["incident"])
-            .attach_suggestion(Suggestion.from_llm("prior answer", ["cmd0"]))
+            .append_turn(Turn.from_suggestion(Suggestion.from_llm("prior answer", ["cmd0"])))
             .to_dict()
         )
         with mock.patch.object(h.charm, "_run_mode_logic") as m:
@@ -770,7 +770,7 @@ class TestAskAction:
 
     def _seed_cached_suggestion(self, h):
         incident = Incident.from_dict(h.charm._status_tracker._state["postgresql/0"]["incident"])
-        incident = incident.attach_suggestion(Suggestion.from_llm("stored", ["cmd"]))
+        incident = incident.append_turn(Turn.from_suggestion(Suggestion.from_llm("stored", ["cmd"])))
         h.charm._status_tracker.update_incident("postgresql/0", incident.to_dict())
 
     def test_get_suggestion_serves_the_cache_by_default(self, tmp_path):
@@ -806,7 +806,7 @@ class TestAskAction:
         h, inc = self._setup(tmp_path)
         incident = (
             Incident.from_dict(h.charm._status_tracker._state["postgresql/0"]["incident"])
-            .attach_suggestion(Suggestion.from_llm("one-shot", []))
+            .append_turn(Turn.from_suggestion(Suggestion.from_llm("one-shot", [])))
             .append_turn(Turn.from_suggestion(Suggestion.from_llm("an answer", []), question="why?"))
         )
         h.charm._status_tracker.update_incident("postgresql/0", incident.to_dict())
@@ -846,8 +846,8 @@ class TestAskAction:
     def test_list_suggestions_returns_turns(self, tmp_path):
         h, inc = self._setup(tmp_path)
         inc_obj = Incident.from_dict(h.charm._status_tracker._state["postgresql/0"]["incident"])
-        inc_obj = inc_obj.attach_suggestion(Suggestion.from_llm("a", [])).attach_suggestion(
-            Suggestion.from_llm("b", [])
+        inc_obj = inc_obj.append_turn(Turn.from_suggestion(Suggestion.from_llm("a", []))).append_turn(
+            Turn.from_suggestion(Suggestion.from_llm("b", []))
         )
         h.charm._status_tracker.update_incident("postgresql/0", inc_obj.to_dict())
         ev = self._event(incident_id=inc.id)
