@@ -689,12 +689,12 @@ Tier model:
 - [x] [python] Build the projection as a pure function of the stored report, a
       budget and a projection version, so it is reproducible without persisting a
       second artifact. This requires the report to keep stable section headings
-- [ ] [python] Keep pod events structured (type, reason, count, lastTimestamp)
-      rather than pre-formatted strings, so the projection can keep Warning and
-      count Normal. Structuring belongs here because the projection is its first
-      consumer. Deferred: today the whole "Kubernetes events" section is Tier 1
-      verbatim, since the collector output is pre-formatted strings, not
-      structured events
+- [x] [python] Keep pod events' repeat count visible (`get_pod_events` now
+      renders the event's own `count` as a `×N` suffix instead of discarding
+      it) and tier "Kubernetes events" as Warning kept verbatim, Normal
+      collapsed to one count line - implemented as a section-specific text
+      parse in `projection.py` rather than restructuring `k8s_events` into
+      dicts through `collector.py` and `report.py`, which stayed unchanged
 - [x] [python] Add a global prompt budget (`max-prompt-bytes`): Tier 1 always
       fits (individually capped, not budget-gated), Tier 2 included while the
       budget allows, Tier 3 always reduced to digests, with explicit omission
@@ -702,10 +702,9 @@ Tier model:
 - [x] [python] De-duplicate identical lines across sections (after whitespace
       normalisation): the summary's error lines no longer repeat verbatim in
       "Recent unit logs"
-- [ ] [python] De-duplicate a changed config option between the executive
-      summary and "Charm config" - the two sections use different line
-      formats, so the line-level dedup above does not catch this; needs
-      matching by option name
+- [x] [python] De-duplicate a changed config option between the executive
+      summary and "Charm config" by option name, since the two sections use
+      different line formats and the line-level dedup above does not catch it
 - [x] [python] Record the projection size and version in the
       `suggestion-generated` audit event, so the AI interaction stays auditable
 - [x] [test] Cover under and over budget, Tier 1 never truncated, and identical

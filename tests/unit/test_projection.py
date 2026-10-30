@@ -154,6 +154,62 @@ class TestWellFormedOutput:
         assert chunk.count("```") == 2, chunk
 
 
+class TestConfigOptionDedupBySummaryVsCharmConfig:
+    def test_changed_option_named_in_summary_does_not_repeat_in_charm_config(self):
+        out = build_projection(_REPORT, 10**9)
+        # The summary's bullet line survives (Tier 1, verbatim).
+        assert "- `max_connections`: `50` (default: `100`)" in out
+        # The differently-formatted repeat in the Charm config digest does not.
+        assert "max_connections: 50" not in out
+
+    def test_unchanged_option_still_appears_in_charm_config(self):
+        # "port" was never named as changed in the summary, so it is not
+        # touched by the by-name dedup and survives the digest normally.
+        out = build_projection(_REPORT, 10**9)
+        assert "port: 5432" in out
+
+    def test_no_effect_when_summary_names_no_changed_options(self):
+        report = _REPORT.replace(
+            "**Config changed from default by operator:**\n- `max_connections`: `50` (default: `100`)\n\n", ""
+        )
+        out = build_projection(report, 10**9)
+        assert "max_connections: 50" in out
+
+
+class TestKubernetesEventsWarningKeptNormalCounted:
+    _REPORT_WITH_EVENTS = _REPORT + (
+        "\n## Kubernetes events\n"
+        "```\n"
+        "2026-01-01T00:00:00Z Warning BackOff Back-off restarting failed container ×14\n"
+        "2026-01-01T00:00:01Z Normal Pulled Container image pulled\n"
+        "2026-01-01T00:00:02Z Normal Started Started container\n"
+        "2026-01-01T00:00:03Z Warning Unhealthy Readiness probe failed\n"
+        "```\n"
+    )
+
+    def test_warning_lines_survive_verbatim(self):
+        out = build_projection(self._REPORT_WITH_EVENTS, 10**9)
+        assert "BackOff" in out
+        assert "×14" in out
+        assert "Unhealthy" in out
+
+    def test_normal_lines_collapse_to_one_count_line(self):
+        out = build_projection(self._REPORT_WITH_EVENTS, 10**9)
+        assert "Pulled" not in out
+        assert "Started container" not in out
+        assert "2 Normal event(s) not shown individually." in out
+
+    def test_unrecognized_line_shape_is_kept_not_dropped(self):
+        report = _REPORT + "\n## Kubernetes events\n```\nsome garbled line\n```\n"
+        out = build_projection(report, 10**9)
+        assert "some garbled line" in out
+
+    def test_survives_a_tiny_budget_like_any_tier1_section(self):
+        out = build_projection(self._REPORT_WITH_EVENTS, 1)
+        assert "BackOff" in out
+        assert "2 Normal event(s) not shown individually." in out
+
+
 class TestUnknownHeadingDefaultsToTier2:
     def test_unlisted_section_is_budget_gated_not_always_kept(self):
         report = _REPORT + "\n## Some Future Section\nnew content here\n"

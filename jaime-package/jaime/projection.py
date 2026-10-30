@@ -24,7 +24,13 @@ Tier 1 here: "Available actions" and "Charm links". The suggest prompt
 explicitly forbids inventing an action or a URL; dropping either under budget
 pressure would let the model do exactly that with no way to tell omission
 from absence.
+
+"Kubernetes events" is Tier 1 but not included verbatim: Warning event lines
+are kept, Normal event lines are collapsed to one count line, regardless of
+budget (the split is not itself budget-gated, the same as Tier 3 digesting).
 """
+
+import re
 
 # Bump when the tiering, the per-section cap or the digest format changes, so
 # a recorded projection size/version pair in the audit log stays meaningful.
@@ -65,6 +71,69 @@ _TIER_3_HEADINGS = frozenset(
         "## Charm config",
     }
 )
+
+
+# "## Kubernetes events" lines are "<timestamp> <type> <reason> <message>
+# [xN]" (see K8sApiClient.get_pod_events). Matched loosely: a line that does
+# not parse is kept verbatim rather than risking signal loss on a parse miss.
+_K8S_EVENT_TYPE_RE = re.compile(r"^\S+\s+(Warning|Normal)\b")
+
+
+def _split_k8s_events(body: list[str]) -> list[str]:
+    """Keep Warning event lines verbatim; collapse Normal lines to one count.
+
+    ARCHITECTURE.md's per-source table tiers Kubernetes events as "Warning
+    kept, Normal counted" rather than the whole section verbatim: a crashing
+    container's Warning events are the signal, while routine Normal events
+    (image pulled, container started) add bulk without diagnosing anything.
+    """
+    kept: list[str] = []
+    normal_count = 0
+    for line in body:
+        match = _K8S_EVENT_TYPE_RE.match(line.strip())
+        if match is None:
+            kept.append(line)
+            continue
+        if match.group(1) == "Warning":
+            kept.append(line)
+        else:
+            normal_count += 1
+    if normal_count:
+        kept.append(f"_{normal_count} Normal event(s) not shown individually._")
+    return kept
+
+
+_SUMMARY_CHANGED_OPTION_RE = re.compile(r"^- `([^`]+)`:")
+_CHARM_CONFIG_OPTION_RE = re.compile(r"^(\S+):")
+
+
+def _changed_option_names(body: list[str]) -> set[str]:
+    """Option names the executive summary names as changed from default."""
+    names = set()
+    for line in body:
+        match = _SUMMARY_CHANGED_OPTION_RE.match(line.strip())
+        if match:
+            names.add(match.group(1))
+    return names
+
+
+def _drop_already_mentioned_options(body: list[str], already_mentioned: set[str]) -> list[str]:
+    """Drop a "Charm config" line for an option the summary already named.
+
+    The summary (`` - `name`: `value` (default: `default`) ``) and "Charm
+    config" (``name: value  # changed from default (default)``) render the
+    same changed option in different formats, so the exact-line dedup above
+    does not catch it; this matches by option name instead.
+    """
+    if not already_mentioned:
+        return body
+    kept = []
+    for line in body:
+        match = _CHARM_CONFIG_OPTION_RE.match(line.strip())
+        if match and match.group(1) in already_mentioned:
+            continue
+        kept.append(line)
+    return kept
 
 
 def _tier(heading: str) -> int:
@@ -193,16 +262,25 @@ def build_projection(report: str, budget_bytes: int, version: int = PROJECTION_V
     rendered: list[str | None] = [None] * len(sections)
     used_bytes = 0
     tier2_indices: list[int] = []
+    changed_option_names: set[str] = set()
 
     # Tier 1 first: always included, each individually capped, never counted
-    # against or truncated by the budget beyond its own cap.
+    # against or truncated by the budget beyond its own cap. The executive
+    # summary is always first in report order, so by the time "Charm config"
+    # (Tier 3) is reached below, changed_option_names is already populated.
     for i, (heading, body) in enumerate(sections):
         tier = _tier(heading)
         if tier == 1:
+            if heading == "## Executive summary":
+                changed_option_names |= _changed_option_names(body)
+            if heading == "## Kubernetes events":
+                body = _split_k8s_events(body)
             text = _cap_bytes(_render(heading, dedup(body)), _TIER_1_SECTION_CAP_BYTES)
             rendered[i] = text
             used_bytes += len(text.encode()) + 1
         elif tier == 3:
+            if heading == "## Charm config":
+                body = _drop_already_mentioned_options(body, changed_option_names)
             text = _digest(heading, dedup(body))
             rendered[i] = text
             used_bytes += len(text.encode()) + 1
