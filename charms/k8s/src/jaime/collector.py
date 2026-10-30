@@ -224,11 +224,15 @@ def collect_context(
     plan for this one application (the charm slices the keyed config object
     before calling); an empty or ``None`` plan keeps the fixed collection.
 
+    Container logs start at ``from_time`` (the incident's first-seen time)
+    when given, else ``log_window_minutes`` ago.
+
     Returns a context dict compatible with report.py, plus k8s-specific keys
     (``k8s_pod``, ``k8s_events``, ``k8s_resource_usage``).
     """
     plan = diagnostics_plan or {}
     now = datetime.datetime.now(datetime.timezone.utc)
+    since_time = from_time or now - datetime.timedelta(minutes=log_window_minutes)
     client = K8sApiClient()
 
     pod = client.get_pod_for_unit(unit_name)
@@ -270,7 +274,7 @@ def collect_context(
         logs = client.get_pod_logs(
             pod_name,
             container=container.get("name"),
-            since_time=from_time,
+            since_time=since_time,
             tail_lines=_FETCH_LINES_CAP,
         )
         if logs:

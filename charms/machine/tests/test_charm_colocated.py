@@ -326,17 +326,17 @@ class TestUpdateStatus:
     def test_principal_always_watched_without_controller(self, tmp_path):
         h = make_harness(tmp_path)
         with (
-            mock.patch.object(JaimeCharm, "_log_principal_status") as log_principal,
+            mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]) as observe_principal,
             mock.patch("jaime.core.JujuControllerClient") as client,
         ):
             h.charm._on_update_status(mock.MagicMock())
-        log_principal.assert_called_once()
+        observe_principal.assert_called_once()
         client.assert_not_called()
 
     def test_no_controller_connection_when_watch_empty(self, tmp_path):
         h = make_harness(tmp_path)
         with (
-            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]),
             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses") as fetch,
         ):
             h.charm._on_update_status(mock.MagicMock())
@@ -355,18 +355,19 @@ class TestUpdateStatus:
             "logrotated/0": {"status": "blocked", "since": "2026-09-23T18:17:01Z", "machine": "0"},
         }
         with (
-            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]),
             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=(statuses, [])),
-            mock.patch.object(JaimeCharm, "_process_unit") as process,
+            mock.patch.object(JaimeCharm, "_process_units") as process,
         ):
             h.charm._on_update_status(mock.MagicMock())
         process.assert_called_once()
-        assert process.call_args[0][0] == "logrotated/0"
+        observations = process.call_args[0][0]
+        assert [obs[0] for obs in observations] == ["logrotated/0"]
 
     def test_missing_credentials_blocks_and_skips_fetch(self, tmp_path):
         h = make_harness(tmp_path, {"watch-applications": "logrotated"})
         with (
-            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]),
             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses") as fetch,
         ):
             h.charm._on_update_status(mock.MagicMock())
@@ -384,7 +385,7 @@ class TestUpdateStatus:
         )
         h.charm.unit.status = ActiveStatus("Ready")
         with (
-            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]),
             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=({}, ["jaime/0"])),
         ):
             h.charm._on_update_status(mock.MagicMock())
@@ -409,7 +410,7 @@ class TestMonitoredApplications:
     def test_principal_seeded_when_watch_empty(self, tmp_path):
         """The principal is always monitored, so it is always named."""
         h = make_harness(tmp_path)
-        with mock.patch.object(JaimeCharm, "_log_principal_status"):
+        with mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]):
             h.charm._on_update_status(mock.MagicMock())
         assert h.charm._monitored_applications() == ["ubuntu"]
 
@@ -424,7 +425,7 @@ class TestMonitoredApplications:
         )
         statuses = {"logrotated/0": {"status": "active", "since": "2026-01-01T00:00:00Z"}}
         with (
-            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]),
             mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None),
             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=(statuses, [])),
         ):
@@ -443,7 +444,7 @@ class TestMonitoredApplications:
             },
         )
         with (
-            mock.patch.object(JaimeCharm, "_log_principal_status"),
+            mock.patch.object(JaimeCharm, "_principal_observations", return_value=[]),
             mock.patch.object(JaimeCharm, "_prerequisite_error", return_value=None),
             mock.patch.object(JaimeCharm, "_fetch_co_located_statuses", return_value=({}, [])),
         ):
@@ -589,14 +590,13 @@ class TestPrincipalStatusMessages:
             ),
             mock.patch("jaime.core.JujuControllerClient", return_value=cm),
             mock.patch("charm.goal_state", return_value=gs),
-            mock.patch.object(JaimeCharm, "_process_unit") as process,
         ):
-            h.charm._log_principal_status()
-        assert process.called
-        args = process.call_args[0]
-        assert args[0] == "ubuntu/0"
-        assert args[1] == "blocked"
-        assert args[3] == "Please initialize OpenBao or integrate with an auto-unseal provider"
+            observations = h.charm._principal_observations()
+        assert len(observations) == 1
+        unit_name, workload, _since, message = observations[0]
+        assert unit_name == "ubuntu/0"
+        assert workload == "blocked"
+        assert message == "Please initialize OpenBao or integrate with an auto-unseal provider"
 
 
 class TestPrincipalControllerDetails:

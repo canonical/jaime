@@ -7,7 +7,6 @@ for the AI pipeline (``_run_mode_logic``, ``_store_turn``,
 mixed into ``CoreMixin``.
 """
 
-import datetime
 import hashlib
 import json
 import logging
@@ -19,45 +18,43 @@ from jaime.incident import Incident, Turn
 from jaime.logging import list_incidents, rotate_audit_log
 from jaime.modes import Mode
 from jaime.redact import redact_text
-from jaime.report import generate_report
+from jaime.report import report_path
+from jaime.timeutil import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
 
-def summarise_usage(entries: list[dict]) -> dict:
-    """Aggregate a list of usage log entries into a summary with per-model breakdown."""
-    prompt_tokens = sum(e.get("prompt_tokens", 0) for e in entries)
-    completion_tokens = sum(e.get("completion_tokens", 0) for e in entries)
-    total_tokens = sum(e.get("total_tokens", 0) for e in entries)
-    costs = [e["cost_usd"] for e in entries if e.get("cost_usd") is not None]
+_USAGE_COUNTERS = ("prompt_tokens", "completion_tokens", "total_tokens")
 
-    by_model = {}
+
+def summarise_usage(entries: list[dict], folded: dict[str, dict] | None = None) -> dict:
+    """Aggregate usage log entries into a summary with per-model breakdown.
+
+    ``folded`` holds per-model totals of entries already folded out of the
+    log (``StatusTracker.folded_usage``); they count towards every total.
+    """
+    by_model: dict[str, dict] = {}
+
+    def add(model: str, calls: int, counts: dict, cost) -> None:
+        m = by_model.setdefault(model, {"calls": 0, **{k: 0 for k in _USAGE_COUNTERS}, "cost_usd": None})
+        m["calls"] += calls
+        for key in _USAGE_COUNTERS:
+            m[key] += counts.get(key, 0)
+        if cost is not None:
+            m["cost_usd"] = (m["cost_usd"] or 0.0) + cost
+
+    for model, totals in (folded or {}).items():
+        add(model, totals.get("calls", 0), totals, totals.get("cost_usd"))
     for e in entries:
-        model = e.get("model") or "unknown"
-        if model not in by_model:
-            by_model[model] = {
-                "calls": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-                "cost_usd": None,
-            }
-        m = by_model[model]
-        m["calls"] += 1
-        m["prompt_tokens"] += e.get("prompt_tokens", 0)
-        m["completion_tokens"] += e.get("completion_tokens", 0)
-        m["total_tokens"] += e.get("total_tokens", 0)
-        if e.get("cost_usd") is not None:
-            m["cost_usd"] = (m["cost_usd"] or 0.0) + e["cost_usd"]
+        add(e.get("model") or "unknown", 1, e, e.get("cost_usd"))
 
+    costs = [m["cost_usd"] for m in by_model.values() if m["cost_usd"] is not None]
     for m in by_model.values():
         if m["cost_usd"] is not None:
             m["cost_usd"] = round(m["cost_usd"], 6)
 
     return {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
+        **{key: sum(m[key] for m in by_model.values()) for key in _USAGE_COUNTERS},
         "cost_usd": round(sum(costs), 6) if costs else None,
         "by_model": by_model,
     }
@@ -98,10 +95,16 @@ class ActionsMixin:
         event.set_results({"result": json.dumps(records, indent=2)})
 
     def _on_action_show_usage(self, event):
+        """Usage summary. Folded (old) entries count in the global totals only.
+
+        Folded entries no longer carry an incident id, so a per-incident view
+        and ``total_incidents`` only see the retained entries.
+        """
         incident_id = event.params.get("incident-id", "").strip()
         all_entries = self._status_tracker.all_usage_log()
+        folded = self._status_tracker.folded_usage()
 
-        if not all_entries:
+        if not all_entries and not folded:
             event.set_results({"result": json.dumps({"message": "no usage recorded yet"}, indent=2)})
             return
 
@@ -113,9 +116,9 @@ class ActionsMixin:
             summary = summarise_usage(entries)
             summary["incident_id"] = incident_id
         else:
-            summary = summarise_usage(all_entries)
+            summary = summarise_usage(all_entries, folded)
             summary["total_incidents"] = len({e.get("incident_id") for e in all_entries})
-            summary["total_calls"] = len(all_entries)
+            summary["total_calls"] = len(all_entries) + sum(m.get("calls", 0) for m in folded.values())
 
         event.set_results({"result": json.dumps(summary, indent=2)})
 
@@ -146,7 +149,11 @@ class ActionsMixin:
             )
             return
 
-        if Mode(self.model.config.get("mode", Mode.OBSERVE)) == Mode.OBSERVE:
+        mode = self._mode()
+        if mode is None:
+            event.fail(f"invalid mode '{self.model.config.get('mode')}'")
+            return
+        if mode == Mode.OBSERVE:
             event.fail("no suggestion available: mode is 'observe'")
             return
 
@@ -157,6 +164,8 @@ class ActionsMixin:
 
         suggestion = self._run_mode_logic(report_content, additional_context)
         if suggestion is None:
+            if self._last_ai_error:
+                self._status_tracker.set_ai_error(unit_name, self._last_ai_error)
             event.fail("could not generate suggestion")
             return
 
@@ -177,13 +186,19 @@ class ActionsMixin:
 
         Ask turns answer a specific question, so only the latest turn with an
         empty question (or the legacy single suggestion) can serve as the
-        cache. It is stale when the configured model changed, or when a
-        different ``additional-context`` was supplied.
+        cache. It is stale when the configured model changed, when a
+        different ``additional-context`` was supplied, or when it was based on
+        an older report version than the incident's latest.
         """
         turns = inc.get("turns") or []
         oneshot = next((t for t in reversed(turns) if not t.get("question")), None)
         suggestion = oneshot or (None if turns else inc.get("suggestion"))
         if not suggestion:
+            return None
+
+        original = f"{inc['id']}.md"
+        if (suggestion.get("report_file") or original) != (inc.get("report_file") or original):
+            logger.info("report refreshed since the stored suggestion - regenerating suggestion")
             return None
 
         current_provider = self.model.config.get("provider", "none")
@@ -202,12 +217,11 @@ class ActionsMixin:
         return suggestion
 
     def _read_report(self, inc: dict) -> tuple[str, str]:
-        """Read an incident's stored report: ``(content, error)``."""
-        report_dir = self.model.config.get("report-dir", "") or "/var/log/jaime/reports"
-        report_path = os.path.join(report_dir, f"{inc['id']}.md")
-        if not os.path.exists(report_path):
-            return "", f"report file not found at {report_path}"
-        with open(report_path) as f:
+        """Read an incident's latest report version: ``(content, error)``."""
+        path = report_path(self.model.config.get("report-dir", ""), Incident.from_dict(inc).report_name)
+        if not os.path.exists(path):
+            return "", f"report file not found at {path}"
+        with open(path) as f:
             return f.read(), ""
 
     @staticmethod
@@ -236,9 +250,10 @@ class ActionsMixin:
         question = redact_text(question)
         incident_id = (event.params.get("incident-id") or "").strip()
 
-        mode = Mode(self.model.config.get("mode", Mode.OBSERVE))
+        mode = self._mode()
         if mode != Mode.SUGGEST:
-            event.fail(f"ask requires mode=suggest (current mode is '{mode.value}')")
+            current = mode.value if mode else self.model.config.get("mode")
+            event.fail(f"ask requires mode=suggest (current mode is '{current}')")
             return
 
         # An explicit id may name a closed incident (follow-up after recovery);
@@ -309,35 +324,32 @@ class ActionsMixin:
                         "turn_id": turn.get("id", ""),
                         "question": turn.get("question", ""),
                         "generated_at": turn.get("generated_at", ""),
+                        "report_file": turn.get("report_file") or f"{inc['id']}.md",
                         "description": turn.get("description", ""),
                     }
                 )
         event.set_results({"result": json.dumps(records)})
 
     def _on_action_generate_report(self, event):
+        """Write a new report version for the open incident; never overwrite one.
+
+        The new version becomes the incident's latest, the one ``ask`` and
+        ``get-suggestion`` use; earlier versions are kept unchanged.
+        """
         for unit_name, entry, inc in self._status_tracker.incidents():
-            since_iso = entry.get("unhealthy_since") or entry.get("since", "")
-            context = self._collect_report_context(unit_name, since_iso)
-            report_path = generate_report(
-                incident_id=inc["id"],
-                unit_name=unit_name,
-                workload=entry.get("status", "unknown"),
-                first_seen=since_iso,
-                context=context,
-                report_dir=self.model.config.get("report-dir", ""),
-                status_message=entry.get("message", ""),
-            )
-            event.set_results(
-                {
-                    "incident-id": inc["id"],
-                    "report-path": report_path,
-                }
-            )
+            try:
+                with self._hook_cache():
+                    path = self._refresh_report(unit_name, entry, inc, utc_now_iso(), reason="manual")
+            except Exception as e:
+                logger.error("generate-report failed for %s: %s", unit_name, e)
+                event.fail(f"could not generate report: {e}")
+                return
+            event.set_results({"incident-id": inc["id"], "report-path": path})
             return
         event.fail("no open incident found")
 
     def _on_action_reset(self, event):
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = utc_now_iso()
         audit_path = self.model.config.get("audit-log-path", "")
 
         # Close every incident still open in the audit log as well as the ones
@@ -345,8 +357,9 @@ class ActionsMixin:
         # incident ever opened, while status-state.json keeps only the latest
         # per unit - so a reset that closes only the tracked incidents would
         # leave older audit rows reported as open by list-incidents forever.
-        # Append a closure row per open incident; we never rewrite history.
-        open_records = list_incidents(audit_path)
+        # Append a closure row per open incident; we never rewrite history, and
+        # an incident already closed gets no second row.
+        open_records = [r for r in list_incidents(audit_path) if r["status"] == "open"]
         closed_incident_ids = set()
         for record in open_records:
             closed_incident_ids.add(record["incident_id"])

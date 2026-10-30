@@ -258,3 +258,64 @@ class TestIncidentAccessors:
 
     def test_path_property(self, tracker, tmp_path):
         assert tracker.path == str(tmp_path / "status-state.json")
+
+
+class TestUsageFolding:
+    def _entry(self, n, model="m", cost=0.5):
+        return {
+            "incident_id": f"inc-{n}",
+            "model": model,
+            "prompt_tokens": 2,
+            "completion_tokens": 1,
+            "total_tokens": 3,
+            "cost_usd": cost,
+        }
+
+    def test_log_is_capped_and_older_entries_folded(self, tracker, monkeypatch):
+        import jaime.principal as jp
+
+        monkeypatch.setattr(jp, "MAX_USAGE_ENTRIES", 3)
+        tracker.observe("pg/0", "blocked", SINCE_A)
+        for n in range(5):
+            tracker.record_usage("pg/0", self._entry(n))
+        assert [e["incident_id"] for e in tracker.usage_log("pg/0")] == ["inc-2", "inc-3", "inc-4"]
+        folded = tracker.folded_usage()
+        assert folded == {
+            "m": {"calls": 2, "prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6, "cost_usd": 1.0}
+        }
+
+    def test_folded_totals_survive_observations_and_reload(self, tracker, tmp_path, monkeypatch):
+        import jaime.principal as jp
+
+        monkeypatch.setattr(jp, "MAX_USAGE_ENTRIES", 1)
+        tracker.observe("pg/0", "blocked", SINCE_A)
+        tracker.record_usage("pg/0", self._entry(0))
+        tracker.record_usage("pg/0", self._entry(1))
+        tracker.observe("pg/0", "active", SINCE_B, watched=False)
+        reloaded = StatusTracker(state_path=str(tmp_path / "status-state.json"))
+        assert reloaded.folded_usage()["m"]["calls"] == 1
+
+    def test_summary_includes_folded_totals(self):
+        from jaime.actions import summarise_usage
+
+        folded = {"m": {"calls": 2, "prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6, "cost_usd": 1.0}}
+        summary = summarise_usage([self._entry(9)], folded)
+        assert summary["total_tokens"] == 9
+        assert summary["cost_usd"] == 1.5
+        assert summary["by_model"]["m"]["calls"] == 3
+
+
+class TestAiError:
+    def test_carried_within_episode_and_cleared_by_new_episode(self, tracker):
+        tracker.observe("pg/0", "blocked", SINCE_A)
+        tracker.set_ai_error("pg/0", "AI provider error: 401")
+        tracker.observe("pg/0", "error", SINCE_B)
+        assert tracker.ai_error("pg/0") == "AI provider error: 401"
+        tracker.observe("pg/0", "active", SINCE_B, watched=False)
+        assert tracker.ai_error("pg/0") == ""
+
+    def test_cleared_explicitly(self, tracker):
+        tracker.observe("pg/0", "blocked", SINCE_A)
+        tracker.set_ai_error("pg/0", "x")
+        tracker.set_ai_error("pg/0", "")
+        assert tracker.ai_error("pg/0") == ""

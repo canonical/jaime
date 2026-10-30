@@ -81,8 +81,29 @@ DIAGNOSTICS_SCHEMA = {
 }
 
 
+_REQUIRED_SECTIONS = DIAGNOSTICS_SCHEMA["properties"]["monitoring_plan"]["required"]
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _check_string_list(mp: dict, key: str, errors: list[str]) -> None:
+    if key not in mp:
+        return
+    if not isinstance(mp[key], list):
+        errors.append(f"'monitoring_plan.{key}' must be a list")
+        return
+    for i, item in enumerate(mp[key]):
+        if not isinstance(item, str):
+            errors.append(f"monitoring_plan.{key}[{i}] must be a string")
+
+
 def validate_diagnostics(plan):
-    """Validate a diagnostics plan dict against the schema.
+    """Validate a diagnostics plan dict against ``DIAGNOSTICS_SCHEMA``.
+
+    Enforces the required fields and sections, the declared field types and
+    the enums. ``health_commands`` is checked for structure only.
 
     Returns a list of error strings. An empty list means valid.
     """
@@ -94,6 +115,9 @@ def validate_diagnostics(plan):
     for field in ["principal_name", "monitoring_plan"]:
         if field not in plan:
             errors.append(f"missing required field: '{field}'")
+    for field in ("principal_name", "generated_at"):
+        if field in plan and not isinstance(plan[field], str):
+            errors.append(f"'{field}' must be a string")
 
     mp = plan.get("monitoring_plan")
     if not isinstance(mp, dict):
@@ -102,6 +126,10 @@ def validate_diagnostics(plan):
         if "monitoring_plan" in plan:
             errors.append("'monitoring_plan' must be a JSON object")
         return errors
+
+    for section in _REQUIRED_SECTIONS:
+        if section not in mp:
+            errors.append(f"monitoring_plan missing required section: '{section}'")
 
     if "log_files" in mp:
         if not isinstance(mp["log_files"], list):
@@ -114,7 +142,10 @@ def validate_diagnostics(plan):
                 for f in ("path", "priority", "description"):
                     if f not in lf:
                         errors.append(f"monitoring_plan.log_files[{i}] missing '{f}'")
-                if lf.get("priority") not in (None, "high", "medium", "low"):
+                for f in ("path", "description"):
+                    if f in lf and not isinstance(lf[f], str):
+                        errors.append(f"monitoring_plan.log_files[{i}] '{f}' must be a string")
+                if "priority" in lf and lf["priority"] not in ("high", "medium", "low"):
                     errors.append(f"monitoring_plan.log_files[{i}] 'priority' must be 'high', 'medium', or 'low'")
 
     if "processes" in mp:
@@ -127,14 +158,14 @@ def validate_diagnostics(plan):
                     continue
                 if "name" not in proc:
                     errors.append(f"monitoring_plan.processes[{i}] missing 'name'")
+                for f in ("name", "parent"):
+                    if f in proc and not isinstance(proc[f], str):
+                        errors.append(f"monitoring_plan.processes[{i}] '{f}' must be a string")
+                for f in ("expected_min_count", "expected_max_count"):
+                    if f in proc and not _is_int(proc[f]):
+                        errors.append(f"monitoring_plan.processes[{i}] '{f}' must be an integer")
 
-    if "env_variables" in mp:
-        if not isinstance(mp["env_variables"], list):
-            errors.append("'monitoring_plan.env_variables' must be a list")
-        else:
-            for i, ev in enumerate(mp["env_variables"]):
-                if not isinstance(ev, str):
-                    errors.append(f"monitoring_plan.env_variables[{i}] must be a string")
+    _check_string_list(mp, "env_variables", errors)
 
     if "network" in mp:
         net = mp["network"]
@@ -151,14 +182,12 @@ def validate_diagnostics(plan):
                     for f in ("port", "protocol"):
                         if f not in p:
                             errors.append(f"monitoring_plan.network.ports[{i}] missing '{f}'")
+                    if "port" in p and not _is_int(p["port"]):
+                        errors.append(f"monitoring_plan.network.ports[{i}] 'port' must be an integer")
+                    if "protocol" in p and p["protocol"] not in ("tcp", "udp"):
+                        errors.append(f"monitoring_plan.network.ports[{i}] 'protocol' must be 'tcp' or 'udp'")
 
-    if "systemd_units" in mp:
-        if not isinstance(mp["systemd_units"], list):
-            errors.append("'monitoring_plan.systemd_units' must be a list")
-        else:
-            for i, u in enumerate(mp["systemd_units"]):
-                if not isinstance(u, str):
-                    errors.append(f"monitoring_plan.systemd_units[{i}] must be a string")
+    _check_string_list(mp, "systemd_units", errors)
 
     if "health_commands" in mp:
         if not isinstance(mp["health_commands"], list):

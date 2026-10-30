@@ -1,4 +1,4 @@
-"""Unit tests for jaime.suggest (suggest/act engine)."""
+"""Unit tests for jaime.suggest (suggest engine)."""
 
 import unittest.mock as mock
 
@@ -7,9 +7,7 @@ import pytest
 from jaime.incident import Suggestion, UsageMetadata
 from jaime.suggest import (
     build_suggest_prompt,
-    execute_command,
     parse_commands,
-    run_act,
     run_suggest,
 )
 
@@ -81,22 +79,6 @@ class TestParseCommands:
         assert "free -h" in result
 
 
-class TestExecuteCommand:
-    def test_successful_command(self):
-        result = execute_command("echo hello")
-        assert result["returncode"] == 0
-        assert "hello" in result["stdout"]
-
-    def test_failed_command(self):
-        result = execute_command("ls /nonexistent_path_xyz")
-        assert result["returncode"] != 0
-
-    def test_timeout_returns_error(self):
-        result = execute_command("sleep 60", timeout=1)
-        assert result["returncode"] == -1
-        assert "timed out" in result["stderr"]
-
-
 class TestRunSuggest:
     def test_returns_suggestion(self):
         provider = _make_provider("The issue is X.\n```bash\nsystemctl status\n```")
@@ -126,34 +108,6 @@ class TestRunSuggest:
         provider.generate.side_effect = RuntimeError("API error")
         with pytest.raises(RuntimeError):
             run_suggest(provider, "report content")
-
-
-class TestRunAct:
-    def test_returns_suggestion_and_results(self):
-        provider = _make_provider("```bash\necho hello\n```")
-        suggestion, results = run_act(provider, "report")
-        assert isinstance(suggestion, Suggestion)
-        assert "echo hello" in suggestion.commands
-        assert len(results) == 1
-        assert results[0]["command"] == "echo hello"
-
-    def test_executes_commands(self):
-        provider = _make_provider("```bash\necho hello\n```")
-        _, results = run_act(provider, "report")
-        assert results[0]["returncode"] == 0
-        assert "hello" in results[0]["stdout"]
-
-    def test_dry_run_does_not_execute(self):
-        provider = _make_provider("```bash\necho hello\n```")
-        with mock.patch("jaime.suggest.execute_command") as mock_exec:
-            _, results = run_act(provider, "report", dry_run=True)
-        mock_exec.assert_not_called()
-        assert "dry-run" in results[0]["stderr"]
-
-    def test_returns_none_when_no_provider(self):
-        suggestion, results = run_act(None, "report")
-        assert suggestion is None
-        assert results == []
 
 
 class TestHistorySection:

@@ -3,7 +3,10 @@
 Every incident produces a **Markdown report** written under `report-dir`
 (default `/var/log/jaime/reports/<incident-id>.md`). Reports are the persisted
 evidence artifact: they are produced from collected facts alone, never from
-model output, and are the input the AI receives in `suggest` mode.
+model output, and are the input the AI receives in `suggest` mode. A report is
+never rewritten: while the incident stays open, a refreshed version
+(`<incident-id>-<UTC timestamp>.md`) is written after each `cooldown-minutes`
+period and by `generate-report`.
 
 Signals are ordered so the most useful content comes first:
 

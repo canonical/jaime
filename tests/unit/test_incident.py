@@ -129,7 +129,7 @@ class TestIncidentStatusMessage:
     def test_message_preserved_after_suggestion_attach(self):
         inc = Incident.open(status_message="unseal needed")
         s = Suggestion.from_llm("diagnosis", ["bao operator unseal"])
-        updated = inc.attach_suggestion(s)
+        updated = inc.append_turn(Turn.from_suggestion(s))
         assert updated.status_message == "unseal needed"
 
 
@@ -152,22 +152,22 @@ class TestSuggestion:
         assert restored.commands == s.commands
         assert restored.generated_at == s.generated_at
 
-    def test_attach_suggestion_to_incident(self):
+    def test_append_suggestion_turn_to_incident(self):
         inc = Incident.open()
         s = Suggestion.from_llm("diagnosis", ["df -h"])
-        updated = inc.attach_suggestion(s)
-        assert updated.suggestion is not None
-        assert updated.suggestion.description == "diagnosis"
-        assert inc.suggestion is None  # original unchanged
+        updated = inc.append_turn(Turn.from_suggestion(s))
+        assert updated.turns
+        assert updated.turns[-1].description == "diagnosis"
+        assert not inc.turns  # original unchanged
 
     def test_incident_with_suggestion_roundtrip(self):
         inc = Incident.open()
         s = Suggestion.from_llm("diagnosis", ["df -h"])
-        updated = inc.attach_suggestion(s)
+        updated = inc.append_turn(Turn.from_suggestion(s))
         restored = Incident.from_dict(updated.to_dict())
-        assert restored.suggestion is not None
-        assert restored.suggestion.description == "diagnosis"
-        assert "df -h" in restored.suggestion.commands
+        assert restored.turns
+        assert restored.turns[-1].description == "diagnosis"
+        assert "df -h" in restored.turns[-1].commands
 
 
 class TestUsageMetadata:
@@ -227,20 +227,20 @@ class TestTurns:
         inc = Incident.open("blocked")
         t1 = Suggestion.from_llm("first", ["cmd1"])
         t2 = Suggestion.from_llm("second", ["cmd2"])
-        inc = inc.attach_suggestion(t1).attach_suggestion(t2)
+        inc = inc.append_turn(Turn.from_suggestion(t1)).append_turn(Turn.from_suggestion(t2))
         assert len(inc.turns) == 2
         assert inc.turns[0].description == "first"
         assert inc.turns[1].description == "second"
-        # Legacy single-shot view reflects the latest turn.
-        assert inc.suggestion.description == "second"
-        assert inc.suggestion.commands == ("cmd2",)
+        # The latest turn is the one-shot view.
+        assert inc.turns[-1].description == "second"
+        assert inc.turns[-1].commands == ("cmd2",)
 
     def test_roundtrip_preserves_turns(self):
         inc = Incident.open("blocked")
-        inc = inc.attach_suggestion(Suggestion.from_llm("a", ["x"]))
+        inc = inc.append_turn(Turn.from_suggestion(Suggestion.from_llm("a", ["x"])))
         restored = Incident.from_dict(inc.to_dict())
         assert len(restored.turns) == 1
-        assert restored.suggestion.description == "a"
+        assert restored.turns[-1].description == "a"
 
     def test_legacy_suggestion_migrates_to_one_turn(self):
         old = {
@@ -256,7 +256,7 @@ class TestTurns:
     def test_prune_keeps_newest(self):
         inc = Incident.open("blocked")
         for i in range(5):
-            inc = inc.attach_suggestion(Suggestion.from_llm(f"turn-{i}", [f"cmd-{i}"]))
+            inc = inc.append_turn(Turn.from_suggestion(Suggestion.from_llm(f"turn-{i}", [f"cmd-{i}"])))
         pruned = inc.prune_turns(2)
         assert [t.description for t in pruned.turns] == ["turn-3", "turn-4"]
 
@@ -270,22 +270,22 @@ class TestTurns:
     def test_turn_ids_increment_from_one(self):
         inc = Incident.open("blocked")
         for i in range(3):
-            inc = inc.attach_suggestion(Suggestion.from_llm(f"t{i}", []))
+            inc = inc.append_turn(Turn.from_suggestion(Suggestion.from_llm(f"t{i}", [])))
         assert [t.id for t in inc.turns] == [1, 2, 3]
         assert inc.next_turn_id == 4
 
     def test_turn_ids_never_reused_after_prune(self):
         inc = Incident.open("blocked")
         for i in range(5):
-            inc = inc.attach_suggestion(Suggestion.from_llm(f"t{i}", []))
+            inc = inc.append_turn(Turn.from_suggestion(Suggestion.from_llm(f"t{i}", [])))
         inc = Incident.from_dict(inc.prune_turns(2).to_dict())
-        inc = inc.attach_suggestion(Suggestion.from_llm("next", []))
+        inc = inc.append_turn(Turn.from_suggestion(Suggestion.from_llm("next", [])))
         assert [t.id for t in inc.turns] == [4, 5, 6]
 
     def test_incident_dict_is_json_serializable(self):
         import json
 
-        inc = Incident.open("blocked").attach_suggestion(Suggestion.from_llm("a", []))
+        inc = Incident.open("blocked").append_turn(Turn.from_suggestion(Suggestion.from_llm("a", [])))
         assert json.loads(json.dumps(inc.to_dict()))["turns"][0]["id"] == 1
 
     def test_legacy_suggestion_continues_numbering(self):
@@ -299,5 +299,21 @@ class TestTurns:
         assert restored.next_turn_id == 2
 
     def test_prune_to_zero_drops_all(self):
-        inc = Incident.open("blocked").attach_suggestion(Suggestion.from_llm("a", []))
+        inc = Incident.open("blocked").append_turn(Turn.from_suggestion(Suggestion.from_llm("a", [])))
         assert inc.prune_turns(0).turns == ()
+
+
+class TestReportFile:
+    def test_report_name_defaults_to_the_first_report(self):
+        inc = Incident.open()
+        assert inc.report_name == f"{inc.id}.md"
+        assert "report_file" not in inc.to_dict()
+
+    def test_report_file_roundtrip(self):
+        inc = Incident.open().with_report("x-20260101T000000Z.md")
+        assert Incident.from_dict(inc.to_dict()).report_name == "x-20260101T000000Z.md"
+
+    def test_turn_report_file_roundtrip(self):
+        turn = Turn(id=1, question="", description="d", report_file="x.md")
+        assert Turn.from_dict(turn.to_dict()).report_file == "x.md"
+        assert "report_file" not in Turn(id=1, question="", description="d").to_dict()

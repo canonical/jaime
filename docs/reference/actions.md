@@ -33,6 +33,11 @@ juju run jaime/0 show-usage
 juju run jaime/0 show-usage incident-id=<incident-id>
 ```
 
+Each unit keeps its 200 most recent usage records; older ones are folded into
+per-model totals. The global summary includes them, so token and cost totals
+stay exact, but a per-incident query and `total_incidents` only see the
+retained records.
+
 ## `get-suggestion`
 
 Return the AI suggestion for the current open incident: a root-cause
@@ -57,7 +62,8 @@ Results: `incident-id`, `description`, `commands`, `command-count`,
 `prompt-tokens`, `completion-tokens`, `total-tokens` and `cost-usd`. The
 suggestion is cached on the incident and regenerated only when the
 `additional-context` or the configured model changes, so `cached` reports
-whether the provider was called; `force=true` skips the cache. Answers to `ask`
+whether the provider was called; `force=true` skips the cache. A stored
+suggestion based on an older report version is not reused. Answers to `ask`
 questions never serve as the cache. Commands are taken only from code blocks
 tagged `bash`: if the model answers in another block (`sh`, `sql`, `yaml`),
 `commands` is empty and the answer is still in `description`. The action fails when no incident is open, when
@@ -82,7 +88,8 @@ Results: `incident-id`, `turn-id` (a per-incident integer: 1, 2, 3 ...),
 `description`, `commands`, `command-count`,
 `generated-at`, and usage when the provider reports it. The prompt carries the
 stored report plus the compact previous turns, so the model keeps the thread
-context (the most recent 10 turns, answers truncated). Requires `mode=suggest`;
+context (the most recent 10 turns, answers truncated). The report is the
+incident's latest version, and each turn records which one it used. Requires `mode=suggest`;
 the action fails in `observe` mode. A provider error fails the action with the
 reason and does not block the unit. Nothing is executed. Each incident keeps at most 20 turns (oldest
 pruned).
@@ -96,19 +103,23 @@ Return the full conversation for an incident as a JSON array under `result`.
 | `incident-id` | string | Incident to list turns for. Empty lists every tracked incident's turns. |
 
 Each record carries `incident_id`, `unit`, `turn_id`, `question`,
-`generated_at`, and `description`.
+`generated_at`, `report_file` (the report version the answer was based on), and
+`description`.
 
 ## `generate-report`
 
-Generate and return a Markdown report for the current open incident. The file is
-written to `report-dir` as `<incident-id>.md`.
+Collect fresh context and write a new report version for the current open
+incident, as `<incident-id>-<UTC timestamp>.md` in `report-dir`. Earlier
+versions, including the first report `<incident-id>.md`, are never
+overwritten. The new version becomes the incident's latest, the one `ask` and
+`get-suggestion` send to the provider.
 
 ```bash
 juju run jaime/0 generate-report
 ```
 
 Results: `incident-id` and `report-path`. The action fails when no incident is
-open.
+open or the collection fails.
 
 ## `list-incidents`
 
@@ -128,8 +139,10 @@ juju run jaime-k8s/0 list-incidents unit=postgresql-k8s/0
 
 Returns a JSON array under `result` with fields `incident_id`, `unit`,
 `workload`, `status_message`, `first_seen`, `status_since`, `opened_at`,
-`report_path`, `closed_at` and `status` (`open` or `closed`). A missing or
-malformed audit log yields an empty list rather than an error.
+`report_path` (the latest report version), `closed_at` and `status` (`open` or
+`closed`). The size-rotated archives (`events.jsonl.1` ...) are read with the
+live file. A missing or malformed audit log yields an empty list rather than an
+error.
 
 ## `reset`
 
@@ -139,8 +152,10 @@ Close every tracked incident and clear the monitoring state.
 juju run jaime/0 reset
 ```
 
-`reset` closes open incidents, then rotates the audit log: the closed history is
-archived to `events.jsonl.<timestamp>` and the configured path restarts empty,
+`reset` closes open incidents (already closed ones get no second closure row),
+then rotates the audit log: the closed history, including the numbered size
+archives, is archived to `events.jsonl.<timestamp>` and the configured path
+restarts empty,
 so `list-incidents` returns nothing afterwards while the archive is retained on
 disk.
 

@@ -407,3 +407,44 @@ class TestValidateK8sDiagnostics:
     def test_port_protocol_is_restricted(self):
         errors = validate_k8s_diagnostics({"app": {"ports": [{"port": 5432, "protocol": "sctp"}]}})
         assert any("protocol' must be 'tcp' or 'udp'" in e for e in errors)
+
+
+class TestValidateDiagnosticsAgainstSchema:
+    def _plan(self, **sections):
+        mp = {"log_files": [], "processes": [], "env_variables": [], "network": {"ports": []}}
+        mp.update(sections)
+        return {"principal_name": "app", "monitoring_plan": mp}
+
+    def test_required_sections_come_from_the_schema(self):
+        for section in DIAGNOSTICS_SCHEMA["properties"]["monitoring_plan"]["required"]:
+            plan = self._plan()
+            del plan["monitoring_plan"][section]
+            assert f"monitoring_plan missing required section: '{section}'" in validate_diagnostics(plan)
+
+    def test_port_must_be_an_integer_and_protocol_an_enum(self):
+        errors = validate_diagnostics(self._plan(network={"ports": [{"port": "80", "protocol": "sctp"}]}))
+        assert any("'port' must be an integer" in e for e in errors)
+        assert any("'protocol' must be 'tcp' or 'udp'" in e for e in errors)
+
+    def test_boolean_is_not_an_integer(self):
+        errors = validate_diagnostics(self._plan(processes=[{"name": "x", "expected_min_count": True}]))
+        assert any("'expected_min_count' must be an integer" in e for e in errors)
+
+    def test_field_types(self):
+        errors = validate_diagnostics(
+            {
+                "principal_name": 3,
+                "monitoring_plan": {
+                    "log_files": [{"path": 1, "priority": "high", "description": "d"}],
+                    "processes": [{"name": 2}],
+                    "env_variables": [],
+                    "network": {},
+                },
+            }
+        )
+        assert "'principal_name' must be a string" in errors
+        assert any("log_files[0] 'path' must be a string" in e for e in errors)
+        assert any("processes[0] 'name' must be a string" in e for e in errors)
+
+    def test_empty_plan_is_valid(self):
+        assert validate_diagnostics(make_empty_plan("app")) == []

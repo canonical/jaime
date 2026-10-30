@@ -1,18 +1,14 @@
-"""Suggest and act modes for Jaime.
+"""Suggest mode for Jaime.
 
-suggest: calls the AI provider with the incident report as context and returns
-         a Suggestion object containing the LLM's diagnosis and commands.
-         Nothing is executed.
-
-act:     same as suggest, but also executes every command in the Suggestion.
-         All executions are audited to the JSONL log.
+Calls the AI provider with the incident report as context and returns a
+Suggestion object containing the LLM's diagnosis and commands. Nothing is
+executed: act mode is gated in the charm and ships no execution code (see
+``ARCHITECTURE.md``, Phase 8).
 """
 
 import hashlib
 import logging
 import re
-import shlex
-import subprocess
 
 from jaime.incident import Suggestion
 
@@ -125,7 +121,7 @@ def build_history_section(history: list[dict] | None) -> str:
 
 
 def build_suggest_prompt(report_content: str, additional_context: str = "") -> str:
-    """Build the prompt to send to the AI provider for suggest/act mode."""
+    """Build the prompt to send to the AI provider for suggest mode."""
     extra = ""
     if additional_context:
         extra = (
@@ -163,31 +159,6 @@ def parse_commands(llm_response: str) -> list[str]:
             if line and not line.startswith("#"):
                 commands.append(line)
     return commands
-
-
-def execute_command(command: str, timeout: int = 30) -> dict:
-    """Execute a command and return a result dict.
-
-    Uses shell=False by splitting the command string with shlex.
-    Returns a dict with keys: command, returncode, stdout, stderr.
-    """
-    try:
-        result = subprocess.run(
-            shlex.split(command),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return {
-            "command": command,
-            "returncode": result.returncode,
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-        }
-    except subprocess.TimeoutExpired:
-        return {"command": command, "returncode": -1, "stdout": "", "stderr": "timed out"}
-    except Exception as e:
-        return {"command": command, "returncode": -1, "stdout": "", "stderr": str(e)}
 
 
 def run_suggest(provider, report_content: str, additional_context: str = "") -> Suggestion:
@@ -231,39 +202,3 @@ def run_ask(provider, report_content: str, question: str, history: list[dict] | 
         context_hash=hashlib.sha256(question.encode()).hexdigest(),
         usage=usage,
     )
-
-
-def run_act(
-    provider,
-    report_content: str,
-    additional_context: str = "",
-    dry_run: bool = False,
-) -> tuple[Suggestion | None, list[dict]]:
-    """Call the AI provider, build a Suggestion, and execute its commands.
-
-    Returns (suggestion, execution_results).
-    If dry_run is True, commands are parsed but not executed.
-    """
-    suggestion = run_suggest(provider, report_content, additional_context)
-    if suggestion is None:
-        return None, []
-
-    results = []
-    for cmd in suggestion.commands:
-        if dry_run:
-            logger.info("act dry-run: would execute: %s", cmd)
-            results.append(
-                {
-                    "command": cmd,
-                    "returncode": None,
-                    "stdout": "",
-                    "stderr": "dry-run: not executed",
-                }
-            )
-        else:
-            logger.info("act: executing command: %s", cmd)
-            result = execute_command(cmd)
-            logger.info("act: command %r exited %d", cmd, result["returncode"])
-            results.append(result)
-
-    return suggestion, results

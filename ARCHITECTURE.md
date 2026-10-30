@@ -62,12 +62,13 @@ charms/k8s           Kubernetes-specific charm, pod collector, Kubernetes API
 
 The rule is that machine-specific host logic and Kubernetes-specific API logic stay out of the shared incident and business logic wherever practical. "Substrate-independent" means independent of *substrate*, not free of Ops: `core.py` is the shared charm controller layer and deliberately uses the Ops status classes. The genuinely substrate- and Juju-free modules are the ones below it — `incident.py`, `report.py`, `suggest.py`, `diagnostics.py`, `logutils.py`, and `providers/`.
 
-Each concrete charm inherits from `CoreMixin` and `CharmBase`, creates a `StatusTracker`, observes its own events, and implements two substrate hooks:
+Each concrete charm inherits from `CoreMixin` and `CharmBase`, creates a `StatusTracker`, observes its own events, and implements one substrate hook, used for incident reports, refreshed reports and `generate-report` alike:
 
 ```text
-_collect_incident_context(unit_name, since_iso, incident) -> context dict
-_collect_report_context(unit_name, since_iso)             -> context dict
+_collect_context(unit_name, from_time) -> context dict   # from_time: incident start, or None
 ```
+
+Two optional hooks, `_substrate_config_error()` and `_prerequisite_error()`, return a blocked-status message; `CoreMixin._on_config_changed` runs them after the shared config checks.
 
 ### Current repository layout
 
@@ -162,27 +163,52 @@ on update-status:
     continue
 
   if status is in watch-statuses:
-    if there is no active incident:
-      create incident
-      store first_seen timestamp
-      write incident-start event
+    store first_seen (unhealthy_since) when the episode starts
 
     if unhealthy duration is below failure-timeout-minutes:
       write still-unhealthy event            # debug log only today
       continue
 
-    if report already generated for this incident:
-      respect cooldown and continue
+    if the episode already has an open incident:
+      if cooldown-minutes has not elapsed since its last report:
+        continue
+      collect context and write a refreshed report version for the same incident
+      write report-generated event (reason: refresh)
+      continue                               # no automatic AI call on a refresh
 
     collect context (substrate-specific, see below)
     generate Markdown report from the collected evidence
-    write report-generated event
+    if collection or report writing failed:
+      write incident-report-failed event, open nothing, retry next cycle
+      continue
+    open the incident: write incident-start and report-generated events
 
     if mode is suggest and an AI provider is configured:
       send the stored report to the provider
       attach the returned Suggestion and usage metadata to the incident
       write suggestion-generated event
+
+  set the unit status once, from the most severe per-unit result
 ```
+
+An incident is recorded only once its report is on disk. Recording it first
+left an open, "reported" incident with no report whenever collection raised,
+and the cooldown then hid it.
+
+One unhealthy episode keeps **one** incident, however long it lasts.
+`cooldown-minutes` only paces refreshed report versions of that incident; it
+never opens a second one. Rejected: opening a new incident per cooldown period
+(the superseded incidents were never closed, and each one cost an LLM call).
+Cost: a long episode adds one report file per cooldown period.
+
+Report versions. The first report of an incident is `<incident-id>.md` and is
+never rewritten. A cooldown refresh and the `generate-report` action write a new
+version, `<incident-id>-<UTC timestamp>.md`. The incident records its latest
+version, which `get-suggestion` and `ask` send to the provider, and every turn
+records the version it was answered from, so each answer stays tied to its
+evidence. A stored suggestion based on an older version is not reused by
+`get-suggestion`. Rejected: overwriting `<incident-id>.md`, which destroyed the
+evidence earlier turns were based on.
 
 The Markdown report is always generated from collected evidence alone. The
 non-AI Markdown report containing that evidence is persisted before the
@@ -268,7 +294,7 @@ the data is unavailable the header falls back to the unit line alone.
 `## Charm config` is one section for both substrates. It lists every option of
 the monitored charm as `name: value`, flags those whose value differs from the
 default with `# changed from default (<default>)` and lists them first, so they
-survive the 100-option cap. Values come from the controller's `Application.Get`
+survive the 400-option cap. Values come from the controller's `Application.Get`
 (k8s always; machine when `juju-api-user`/`juju-api-password` are set); the
 machine charm also reads the declared options from the principal's
 `config.yaml`. Without controller credentials only the declared defaults are
@@ -322,14 +348,16 @@ Two rules follow from this:
   separate process, so the connection can only be reused *within* one hook
   execution.
 
-The current implementation meets the first half of this and not yet the second:
-`_fetch_unit_statuses` performs a single connection, login, and `FullStatus`
-per cycle, but `_fetch_app_config` opens a second connection and login for each
-unit that opens an incident, and `get_pod_for_unit` lists every pod in the
-namespace per unit (twice, when the annotation lookup misses and it falls back
-to the name convention). With one or two watched applications the cost is
-negligible; it grows linearly with the number of simultaneously unhealthy
-units. Consolidating this is future work and is not required for correctness.
+`Client.FullStatus` is fetched at most once per hook and shared by the
+prerequisite check, the status fetch and the report header, on both charms. A
+failed fetch is remembered for the rest of the hook too, so an unreachable
+controller costs one timeout rather than one per caller. Two per-unit costs
+remain: `Application.Get` opens one connection per incident report, and
+`get_pod_for_unit` lists every pod in the namespace per unit (twice, when the
+annotation lookup misses and it falls back to the name convention). With one or
+two watched applications the cost is negligible; it grows linearly with the
+number of simultaneously unhealthy units. Consolidating it is future work and is
+not required for correctness.
 
 ### Episodes and the unhealthy timer
 
@@ -352,6 +380,8 @@ unit crosses that boundary. Consequences:
   flapping workload eventually reports instead of resetting its timer forever
 - flapping does not open a second incident, because the cooldown bookkeeping
   survives a `since` bump
+- a long episode keeps one incident; after each cooldown period the report is
+  refreshed as a new version of that incident
 - the log-collection window starts at `unhealthy_since`, so the causal error at
   the beginning of the failure is inside the collected window
 
@@ -383,6 +413,10 @@ Ready: no apps in watch-applications      # k8s, nothing configured
   least one unit. With nothing configured it keeps its existing opt-out text.
 - The text appears only in the active state. Waiting, blocked, maintenance and
   open-incident statuses are unchanged.
+- With several monitored units the status is set once per cycle from the
+  per-unit results, most severe first: blocked, then an open incident, then
+  waiting for `failure-timeout-minutes`, then ready. A healthy unit processed
+  last must not hide another unit's incident.
 - `show-status` lists the same resolved applications. An application removed
   from `watch-applications` disappears from the action, while the tracker keeps
   the observation itself for the incident history.
@@ -421,8 +455,8 @@ configured model changes, or when `get-suggestion` is run with `force=true`.
 
 ### act
 
-**Not implemented, and not part of the current phase.** `run_act` exists in
-`suggest.py`, but setting `mode: act` puts the charm in a blocked state.
+**Not implemented, and not part of the current phase.** No command-execution
+code ships for it: setting `mode: act` puts the charm in a blocked state.
 Assisted remediation is Phase 8 of the roadmap.
 
 When implemented, act mode must use:
@@ -685,6 +719,14 @@ and cost when the provider reports it. Entries are appended to a per-unit
 cleared by a new episode. The `show-usage` action aggregates them into a global
 summary with a per-model breakdown, or filters to a single incident.
 
+The log is bounded: each unit keeps its most recent 200 entries, and older
+entries are folded into a per-model running total (`usage_folded`: calls,
+tokens, cost). The global summary includes the folded totals, so the totals
+and costs stay exact. What is lost is per-incident detail for folded entries:
+`show-usage incident-id=...` only sees retained entries, and `total_incidents`
+counts incidents with retained entries. Rejected: an unbounded log (every hook
+rewrites the whole state file), and dropping old entries (wrong totals).
+
 ### Conversational suggestions
 
 Today an incident holds one `Suggestion`, and regeneration replaces it. The
@@ -695,8 +737,9 @@ answer per turn, all retained.
 - **State.** An incident carries a bounded append-only list of turns, not one
   suggestion. Each turn records an `id` (a per-incident integer incremented
   by one per turn, never reused after pruning), the `question`, the `answer`, parsed
-  `commands`, `generated_at`, the `context_hash` (bound to the turn's inputs)
-  and `usage`. The list is capped at a fixed 20 turns per
+  `commands`, `generated_at`, the `context_hash` (bound to the turn's inputs),
+  the report version it was answered from (`report_file`) and `usage`. The
+  list is capped at a fixed 20 turns per
   incident (a constant in the code, not a config option); the oldest turns are
   pruned at the cap. Existing incidents without
   a list read as empty. `get-suggestion` keeps its one-shot contract and returns
@@ -753,10 +796,20 @@ Report generator
 JSONL audit log + Markdown report
 ```
 
-On the machine substrate a diagnostics plan feeds the collector. It is generated
-once on `principal-relation-joined` — either from the `diagnostics` config option
-or by asking the AI provider — and written to `/var/lib/jaime/diagnostics.json`.
-`config-changed` does not regenerate it.
+On the machine substrate a diagnostics plan feeds the collector. It is written to
+`/var/lib/jaime/diagnostics.json` on `principal-relation-joined`, either from
+the `diagnostics` config option or by asking the AI provider. `config-changed`
+applies a non-empty `diagnostics` option immediately, and an invalid one blocks
+the unit. Clearing the option after an operator plan was applied regenerates
+the plan as on relation-joined. Otherwise `config-changed` never calls the AI
+provider, so an unrelated config change costs nothing.
+
+A machine plan is validated against `DIAGNOSTICS_SCHEMA`, the same schema the
+generation prompt sends to the provider. The `log_files`, `processes`,
+`env_variables` and `network` sections are required (empty lists are fine),
+and the declared field types and enums are enforced. An AI-generated plan that
+fails validation falls back to an empty plan; an operator plan that fails blocks
+the unit. `health_commands` keeps a structural check only; its policy is Phase 8.
 
 On the Kubernetes substrate the same `diagnostics` option holds an
 operator-written plan keyed by application name, read from config at collection
@@ -799,9 +852,18 @@ Runtime paths, identical on both substrates:
 
 /var/log/jaime/
   events.jsonl                append-only JSONL audit log
+  events.jsonl.1 .. .5        size-rotated archives, newest first, read by list-incidents
+  events.jsonl.<timestamp>    archives moved aside by reset, not read
   reports/
-    <incident-id>.md
+    <incident-id>.md          first report, never rewritten
+    <incident-id>-<ts>.md     refreshed report versions
 ```
+
+The audit log rotates when it reaches 10 MiB, keeping five numbered archives,
+so it is bounded at about 60 MiB. `list-incidents` reads the archives with the
+live file, so rotation does not hide history; an incident whose
+`incident-start` row has aged out of the oldest archive is listed without an
+open time.
 
 `report-dir` and `audit-log-path` are configurable. On the machine substrate
 these paths live on the host and survive hook and unit restarts. On Kubernetes
@@ -817,11 +879,14 @@ incident ID, and unit name:
 ```text
 incident-start          incident opened, with the workload status message
 incident-closed         incident closed by recovery or manual reset
-context-collected       context collected, with log line count (machine only)
-report-generated        Markdown report written, with report path
-suggestion-generated    AI suggestion attached, with usage metadata
-act-command-executed    reserved for act mode, not reachable today
+incident-report-failed  collection or report writing failed; nothing opened, retried next cycle
+context-collected       context collected, with log line count
+report-generated        Markdown report written, with report path and reason (open, refresh, manual)
+suggestion-generated    AI suggestion attached, with usage metadata and report file
 ```
+
+`incident-report-failed` carries no incident id, because no incident was
+opened, so `list-incidents` never shows a phantom incident for it.
 
 `incident-closed` is written when a unit recovers and again on a `reset`
 action, so closure and duration are part of the durable trail. A `reset`
@@ -829,8 +894,9 @@ first appends a closure row for **every** incident still open in the audit
 log, not only the tracker's current one — `events.jsonl` is append-only and
 remembers incidents that `status-state.json` has already forgotten, so
 without the backfill those rows would be reported as open by
-`list-incidents` forever. It then **rotates** the log: the closed history is
-moved to `events.jsonl.<timestamp>` and the configured path restarts empty,
+`list-incidents` forever. Incidents already closed get no second row. It then
+**rotates** the log: the closed history, including the numbered size archives,
+is moved to `events.jsonl.<timestamp>` and the configured path restarts empty,
 so a subsequent `list-incidents` sees no residual incidents while the
 archived trail is retained for forensics. Incidents old enough to predate
 the closure event have no `incident-closed` row and are reported as open
@@ -1027,7 +1093,7 @@ only its principal can.
 A related observation from the same run: Jaime's `goal-state` returned identical
 content under both the `principal` and `juju-info` endpoints, listing
 `logrotated` under `principal` even though the relation was on a different
-endpoint. The `own_principal_units` filter in `_log_principal_status` is
+endpoint. The `own_principal_units` filter in `_principal_observations` is
 therefore load-bearing, not defensive.
 
 A satellite charm holding the controller connection was considered and rejected.

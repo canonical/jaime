@@ -1,6 +1,6 @@
 """Unit tests for jaime.logutils (log filtering and de-duplication)."""
 
-from jaime.logutils import deduplicate_lines, filter_error_context, line_pattern
+from jaime.logutils import deduplicate_lines, filter_error_context, line_pattern, read_tail
 
 
 class TestLinePattern:
@@ -81,3 +81,45 @@ class TestFilterErrorContext:
         lines = ["INFO a", "INFO b", "INFO c"]
         out = filter_error_context(lines, max_lines=100)
         assert out == lines
+
+
+class TestDeduplicateMarkers:
+    def test_markers_follow_the_line_they_count(self):
+        lines = []
+        for _ in range(3):
+            lines += ["ERROR disk full on /dev/sda1"] * 5 + ["INFO tick"]
+        out = deduplicate_lines(lines)
+        assert out == [
+            "ERROR disk full on /dev/sda1",
+            "    … 14 similar lines omitted",
+            "INFO tick",
+            "    … 2 similar lines omitted",
+        ]
+
+    def test_existing_markers_are_carried_through(self):
+        lines = ["    … 8 similar lines omitted", "2026-07-14 10:00:00 ERROR x"]
+        assert deduplicate_lines(lines) == lines
+
+
+class TestFilterErrorContextModes:
+    LINES = ["a", "ERROR one", "b", "c", "d", "e", "ERROR two", "f"]
+
+    def test_window_around_last_keeps_every_match(self):
+        out = filter_error_context(self.LINES, 100, context_window=1, window="last", keep_matches=True)
+        assert out == ["ERROR one", "e", "ERROR two", "f"]
+
+    def test_window_around_last_only(self):
+        out = filter_error_context(self.LINES, 100, context_window=1, window="last", keep_matches=False)
+        assert out == ["e", "ERROR two", "f"]
+
+
+class TestReadTail:
+    def test_reads_whole_small_file(self, tmp_path):
+        path = tmp_path / "log"
+        path.write_text("a\nb\nc\n")
+        assert read_tail(str(path)) == ["a", "b", "c"]
+
+    def test_byte_bound_drops_the_partial_first_line(self, tmp_path):
+        path = tmp_path / "log"
+        path.write_text("first line\nsecond\nthird\n")
+        assert read_tail(str(path), max_bytes=10) == ["third"]

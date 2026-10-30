@@ -2,7 +2,7 @@
 
 import os
 
-from jaime.report import generate_report
+from jaime.report import _MAX_CHARM_OPTIONS, generate_report
 from jaime.suggest import build_suggest_prompt
 
 INCIDENT_ID = "550e8400-e29b-41d4-a716-446655440000"
@@ -651,10 +651,16 @@ class TestExecutiveSummary:
 
 class TestCharmConfigCap:
     def test_options_capped(self, tmp_path):
-        options = "\n".join(f"  opt{i}:\n    default: v{i}" for i in range(150))
+        options = "\n".join(f"  opt{i}:\n    default: v{i}" for i in range(_MAX_CHARM_OPTIONS + 50))
         config_yaml = f"options:\n{options}\n"
         report = _render(tmp_path, {"charm_config": {"config_yaml": config_yaml}})
-        assert "more options omitted" in report
+        assert "_… 50 more options omitted._" in report
+
+    def test_options_under_the_cap_are_all_listed(self, tmp_path):
+        options = "\n".join(f"  opt{i}:\n    default: v{i}" for i in range(_MAX_CHARM_OPTIONS))
+        config_yaml = f"options:\n{options}\n"
+        report = _render(tmp_path, {"charm_config": {"config_yaml": config_yaml}})
+        assert "more options omitted" not in report
 
 
 class TestDeclaredPorts:
@@ -1050,7 +1056,10 @@ class TestCharmConfigSection:
         assert "password: [REDACTED]  # changed from default\n" in content
 
     def test_changed_options_survive_the_cap(self):
-        live = {f"opt{i:03}": {"value": "v", "default": "v", "source": "default", "type": "string"} for i in range(150)}
+        live = {
+            f"opt{i:04}": {"value": "v", "default": "v", "source": "default", "type": "string"}
+            for i in range(_MAX_CHARM_OPTIONS + 50)
+        }
         live["zzz-last"] = {"value": "new", "default": "old", "source": "user", "type": "string"}
         content = self._render({"juju_config": live})
         assert "zzz-last: new  # changed from default (old)" in content
@@ -1058,3 +1067,14 @@ class TestCharmConfigSection:
 
     def test_no_section_without_any_config_data(self):
         assert "## Charm config" not in self._render({})
+
+
+class TestReportVersions:
+    def test_versioned_report_never_overwrites(self, tmp_path):
+        first = generate_report("inc", "pg/0", "blocked", "", {}, report_dir=str(tmp_path))
+        second = generate_report("inc", "pg/0", "blocked", "", {}, report_dir=str(tmp_path), versioned=True)
+        third = generate_report("inc", "pg/0", "blocked", "", {}, report_dir=str(tmp_path), versioned=True)
+        assert os.path.basename(first) == "inc.md"
+        assert len({first, second, third}) == 3
+        assert os.path.basename(second).startswith("inc-")
+        assert all(os.path.exists(p) for p in (first, second, third))

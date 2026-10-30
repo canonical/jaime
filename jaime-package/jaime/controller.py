@@ -26,6 +26,8 @@ import tempfile
 
 import websocket
 
+from jaime.names import unit_tag
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,8 +44,7 @@ def agent_conf_path(unit_name: str | None = None) -> str | None:
     unit = unit_name or os.environ.get("JUJU_UNIT_NAME", "")
     if not unit:
         return None
-    dirname = "unit-" + unit.replace("/", "-")
-    path = f"/var/lib/juju/agents/{dirname}/agent.conf"
+    path = f"/var/lib/juju/agents/{unit_tag(unit)}/agent.conf"
     return path if os.path.exists(path) else None
 
 

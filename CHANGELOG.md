@@ -17,13 +17,33 @@
 - `## Charm config` in the report now lists every option of the monitored charm with its value and flags those changed from the default. It replaces `## Juju application config`. On the machine charm, values need `juju-api-user`/`juju-api-password`; without them the declared defaults are shown
 - The suggestion prompt repeats its response-format rules after the report, so small local models that truncate long prompts still answer in the expected format
 - Internal refactoring: the shared code is split into smaller modules, the providers share one HTTP implementation, broad exception handlers are narrowed, and the code base is formatted with `ruff format`
+- A unit that stays unhealthy keeps one incident for the whole episode. After each `cooldown-minutes` period Jaime writes a refreshed report version for that incident, without an AI call, instead of opening a new incident
+- Reports are never overwritten: the first is `<incident-id>.md`, and cooldown refreshes and `generate-report` write `<incident-id>-<UTC timestamp>.md`. `ask` and `get-suggestion` use the latest version, each conversation turn records the version it answered from (`report_file`, also in `list-suggestions`), and a stored suggestion based on an older version is regenerated
+- `generate-report` collects context for the incident's own time window, like the automatic report
+- The machine `diagnostics` option is applied on `config-changed`, without re-relating; clearing it regenerates the plan. Machine plans are validated against `DIAGNOSTICS_SCHEMA`: the `log_files`, `processes`, `env_variables` and `network` sections are required, and field types and enums are checked
+- The audit log rotates at 10 MiB, keeping five numbered archives that `list-incidents` reads; each unit keeps its 200 most recent usage records and folds older ones into per-model totals, so `show-usage` totals stay exact
+- `Client.FullStatus` is fetched at most once per hook on both charms
+- Machine log files are read from the end with a byte bound instead of being loaded whole, and `snap list`/`snap services` run once per collection
+- `context-collected` is now audited on both charms
+- `## Charm config` lists up to 400 options instead of 100, so large charms such as postgresql (about 360 options) are shown in full
 
 ### Removals
 
 - Remove the machine charm `diagnose` action; `show-status` and `generate-report` cover the same information
+- Remove the unreachable act-mode command execution code (`run_act`, `execute_command`); `mode: act` still blocks the unit
 
 ### Bug fixes
 
+- Honour `failure-timeout-minutes` on Ubuntu 22.04 (Python 3.10): Juju timestamps with a `Z` suffix and nanoseconds failed to parse, so incidents opened on the first unhealthy observation of any unit read from the controller (every k8s unit, co-located machine units)
+- An incident is recorded only once its report is written. A collection failure no longer leaves an open incident without a report; it writes `incident-report-failed` and is retried on the next `update-status`
+- With several monitored units, the unit status reflects the most severe one, so a healthy unit processed last no longer hides another unit's open incident or AI error
+- `reset` no longer writes a second closure row, with a new close time, for incidents that were already closed
+- De-duplicated logs no longer show "... N similar lines omitted" markers under the wrong line, and their counts include run lengths
+- Machine port checks only count listening sockets with a matching protocol, and read the full `ss` output, so a busy host or an established connection to the port no longer gives a wrong result
+- A malformed health command in the diagnostics plan no longer aborts context collection
+- `ask` and `get-suggestion` fail cleanly when `mode` holds an invalid value
+- journalctl `--since` is passed in UTC
+- Raise the machine charm `ops` requirement to 3.4, the first release with `ops.hookcmds`
 - A charm whose `config.yaml` declares a non-mapping option no longer aborts report generation; such options are skipped
 - Fix the missing `## Charm config` section in machine reports: the collector tailed `config.yaml` to the last 200 lines, which for a large file severed the top-level `options:` mapping and silently dropped the section. Charm YAML files are now read in full, guarded by a byte cap applied at the call site, and an unparsable-but-present `config.yaml` renders a visible note instead of vanishing
 

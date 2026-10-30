@@ -8,6 +8,7 @@ import os
 
 from ops import JujuContext
 from ops.charm import CharmBase
+from ops.framework import StoredState
 from ops.hookcmds import goal_state
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, ModelError
@@ -27,9 +28,9 @@ from jaime.diagnostics import (
     validate_diagnostics,
     write_diagnostics_file,
 )
-from jaime.incident import Incident
-from jaime.logging import write_event
+from jaime.names import app_of
 from jaime.principal import StatusTracker
+from jaime.timeutil import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,14 @@ class JaimeCharm(CoreMixin, CharmBase):
     _diagnostics_dir = "/var/lib/jaime"
     _diagnostics_path = f"{_diagnostics_dir}/diagnostics.json"
     _context_dir = "/var/lib/jaime/incidents"
+    _stored = StoredState()
 
     def __init__(self, *args):
         super().__init__(*args)
         self._status_tracker = StatusTracker()
+        # Whether the plan on disk came from the diagnostics option, so that
+        # clearing the option regenerates it instead of keeping a stale plan.
+        self._stored.set_default(diagnostics_from_config=False)
 
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.update_status, self._on_update_status)
@@ -63,22 +68,26 @@ class JaimeCharm(CoreMixin, CharmBase):
     # Monitoring
     # ------------------------------------------------------------------
 
-    def _on_config_changed(self, event):
-        """Validate config, then surface a broken controller prerequisite.
+    def _substrate_config_error(self) -> str | None:
+        """Apply the diagnostics option when it is set or was just cleared.
 
-        Credentials are only required once the operator opts in to watching
-        co-located units, so the zero-config path is never blocked. Mirrors
-        the k8s charm, where the same check is unconditional because that
-        charm always needs the controller.
+        A non-empty option is validated and written on every config-changed,
+        so an invalid one keeps the unit blocked. Clearing it after an operator
+        plan was applied regenerates the plan as on relation-joined; otherwise
+        config-changed never calls the AI provider.
         """
-        super()._on_config_changed(event)
-        if isinstance(self.unit.status, BlockedStatus):
-            return
-        prereq = self._prerequisite_error()
-        if prereq:
-            self.unit.status = BlockedStatus(prereq)
+        if self.model.config.get("diagnostics", ""):
+            return self._ensure_diagnostics()
+        if self._stored.diagnostics_from_config and self._get_principal_name():
+            return self._ensure_diagnostics()
+        return None
 
     def _on_update_status(self, event):
+        with self._hook_cache():
+            self._monitor()
+
+    def _monitor(self):
+        """Observe the principal and co-located units, then drive their incidents."""
         relations = self._principal_relations()
 
         if not relations:
@@ -88,44 +97,35 @@ class JaimeCharm(CoreMixin, CharmBase):
         # The principal is always monitored, and always from the local
         # goal-state hook tool: it needs no credentials and keeps working
         # when the controller is unreachable.
-        self._log_principal_status()
+        observations = self._principal_observations()
 
         # Co-located units are opt-in and read from the controller API.
-        # Empty watch-applications means no controller connection at all.
-        if not self._watch_applications():
-            return
+        # Empty watch-applications means no controller connection at all. A
+        # controller problem still lets the principal be processed, then wins
+        # the unit status.
+        error_status = None
+        other_jaime: list[str] = []
+        if self._watch_applications():
+            prereq = self._prerequisite_error()
+            if prereq:
+                error_status = BlockedStatus(prereq)
+            else:
+                try:
+                    statuses, other_jaime = self._fetch_co_located_statuses()
+                except ControllerError as e:
+                    error_status = self._controller_error_status(e)
+                else:
+                    now_iso = utc_now_iso()
+                    observations += [
+                        (unit_name, info["status"], info.get("since") or now_iso, info.get("message", ""))
+                        for unit_name, info in statuses.items()
+                    ]
 
-        prereq = self._prerequisite_error()
-        if prereq:
-            self.unit.status = BlockedStatus(prereq)
+        self._process_units(observations)
+        if error_status is not None:
+            self.unit.status = error_status
             return
-
-        try:
-            statuses, other_jaime = self._fetch_co_located_statuses()
-        except ControllerAuthError as e:
-            logger.error("Juju controller authentication failed: %s", e)
-            self.unit.status = BlockedStatus("juju-api credentials rejected by controller")
-            return
-        except ControllerError as e:
-            logger.warning("could not fetch co-located unit statuses: %s", e)
-            self.unit.status = MaintenanceStatus(str(e)[:100])
-            return
-
-        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        for unit_name, info in statuses.items():
-            self._process_unit(
-                unit_name,
-                info["status"],
-                info.get("since") or now_iso,
-                info.get("message", ""),
-            )
-
         self._report_other_jaime_units(other_jaime)
-
-    def _watch_applications(self) -> list[str]:
-        """Applications named in watch-applications, in config order."""
-        raw = self.model.config.get("watch-applications", "")
-        return [a.strip() for a in raw.split(",") if a.strip()]
 
     def _monitored_applications(self) -> list[str]:
         """Applications resolved as monitored, derived from persisted state.
@@ -138,7 +138,7 @@ class JaimeCharm(CoreMixin, CharmBase):
         """
         watch = self._watch_applications()
         wildcard = "*" in watch
-        tracked = {name.split("/")[0] for name in self._status_tracker.units()}
+        tracked = {app_of(name) for name in self._status_tracker.units()}
         apps = []
         principal = self._get_principal_name()
         if principal:
@@ -177,9 +177,9 @@ class JaimeCharm(CoreMixin, CharmBase):
         if not self._has_controller_credentials():
             return CREDENTIALS_REQUIRED
 
+        # The FullStatus fetched here is reused by the rest of the hook.
         try:
-            with self._controller_session():
-                pass
+            self._full_status()
         except ControllerAuthError:
             return CREDENTIALS_REJECTED
         except Exception as e:
@@ -192,11 +192,10 @@ class JaimeCharm(CoreMixin, CharmBase):
 
         Returns ``(statuses, other_jaime)``. ``statuses`` is filtered to this
         unit's machine and excludes Jaime itself; the principal is excluded
-        too because it is already handled by ``_log_principal_status``, and
+        too because it is already observed by ``_principal_observations``, and
         processing it twice per cycle would corrupt its incident counters.
         """
-        with self._controller_session() as client:
-            full = client.full_status()
+        full = self._full_status()
 
         machine = self._machine_id()
         if not machine:
@@ -236,7 +235,7 @@ class JaimeCharm(CoreMixin, CharmBase):
         return sorted(
             name
             for name, info in all_units.items()
-            if name != self.unit.name and name.split("/")[0] == self.app.name and info.get("machine") == machine
+            if name != self.unit.name and app_of(name) == self.app.name and info.get("machine") == machine
         )
 
     def _report_other_jaime_units(self, other_jaime: list[str]) -> None:
@@ -250,8 +249,11 @@ class JaimeCharm(CoreMixin, CharmBase):
                 "possible (deduplication deferred to Phase 6.1)"
             )
 
-    def _log_principal_status(self):
-        """Read principal unit workload status via goal-state and drive incidents."""
+    def _principal_observations(self) -> list[tuple[str, str, str, str]]:
+        """Principal observations from goal-state: ``(unit, status, since, message)``.
+
+        Returns an empty list when goal-state cannot be read.
+        """
         # Build the set of units actually related to this Jaime instance.
         # This filter is load-bearing, not defensive: goal-state returns the
         # same content under both the 'principal' and 'juju-info' endpoints,
@@ -276,7 +278,7 @@ class JaimeCharm(CoreMixin, CharmBase):
                 observations.append((unit_name, status, goal.since.isoformat()))
         except Exception as e:
             logger.warning("could not read principal goal-state: %s", e)
-            return
+            return []
 
         # goal-state carries only the status name and timestamp, not the
         # free-text message shown by `juju status`. When the operator has
@@ -288,8 +290,9 @@ class JaimeCharm(CoreMixin, CharmBase):
         if any(status in watched for _, status, _ in observations):
             messages = self._principal_status_messages()
 
-        for unit_name, status, since_iso in observations:
-            self._process_unit(unit_name, status, since_iso, messages.get(unit_name, ""))
+        return [
+            (unit_name, status, since_iso, messages.get(unit_name, "")) for unit_name, status, since_iso in observations
+        ]
 
     def _principal_status_messages(self) -> dict[str, str]:
         """Workload status messages for the principal unit, keyed by unit name.
@@ -306,56 +309,24 @@ class JaimeCharm(CoreMixin, CharmBase):
         if not principal_app:
             return {}
 
-        def messages(client):
-            statuses = extract_unit_statuses(client.full_status(), watch_applications=[principal_app])
+        def messages(full_status):
+            statuses = extract_unit_statuses(full_status, watch_applications=[principal_app])
             return {name: info.get("message", "") for name, info in statuses.items() if info.get("message")}
 
-        return self._controller_query(messages, {}, "principal status messages")
+        return self._full_status_query(messages, {}, "principal status messages")
 
     # ------------------------------------------------------------------
     # Substrate hooks used by CoreMixin
     # ------------------------------------------------------------------
 
-    def _collect_incident_context(self, unit_name: str, since_iso: str, incident: Incident) -> dict:
+    def _collect_context(self, unit_name: str, from_time: datetime.datetime | None) -> dict:
         """Collect local diagnostic context on the machine (plan-driven)."""
-        log_window = self.model.config.get("log-window-minutes", 30)
-        max_lines = self.model.config.get("max-context-lines", 500)
-        try:
-            from_dt = datetime.datetime.fromisoformat(since_iso)
-        except ValueError:
-            from_dt = None
-        diagnostics_plan = read_diagnostics_file(self._diagnostics_path)
-
         context = collect_context(
             unit_name,
-            log_window,
-            max_lines,
-            from_time=from_dt,
-            diagnostics_plan=diagnostics_plan,
-        )
-        write_event(
-            {
-                "event": "context-collected",
-                "unit": unit_name,
-                "incident_id": incident.id,
-                "log_lines": len(context.get("unit_logs", [])),
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            },
-            self.model.config.get("audit-log-path", ""),
-        )
-        self._add_principal_controller_details(context)
-        return context
-
-    def _collect_report_context(self, unit_name: str, since_iso: str) -> dict:
-        """Collect context for a manually regenerated report."""
-        log_window = self.model.config.get("log-window-minutes", 30)
-        max_lines = self.model.config.get("max-context-lines", 500)
-        diagnostics_plan = read_diagnostics_file(self._diagnostics_path)
-        context = collect_context(
-            unit_name,
-            log_window,
-            max_lines,
-            diagnostics_plan=diagnostics_plan,
+            self.model.config.get("log-window-minutes", 30),
+            self.model.config.get("max-context-lines", 500),
+            from_time=from_time,
+            diagnostics_plan=read_diagnostics_file(self._diagnostics_path),
         )
         self._add_principal_controller_details(context)
         return context
@@ -372,8 +343,8 @@ class JaimeCharm(CoreMixin, CharmBase):
         principal_app = self._get_principal_name()
         if not principal_app:
             return
-        context["app_metadata"] = self._controller_query(
-            lambda client: extract_app_metadata(client.full_status(), principal_app),
+        context["app_metadata"] = self._full_status_query(
+            lambda full_status: extract_app_metadata(full_status, principal_app),
             {},
             "principal app metadata",
         )
@@ -389,7 +360,13 @@ class JaimeCharm(CoreMixin, CharmBase):
 
     def _on_principal_joined(self, event):
         logger.info("principal relation joined: %s", event.relation)
-        self._ensure_diagnostics()
+        error = self._ensure_diagnostics()
+        if error:
+            self.unit.status = BlockedStatus(error)
+        elif not self._get_principal_name():
+            self.unit.status = ActiveStatus("no principal to diagnose")
+        else:
+            self.unit.status = ActiveStatus("Ready")
 
     def _on_principal_changed(self, event):
         logger.info("principal relation changed: %s", event.relation)
@@ -398,45 +375,50 @@ class JaimeCharm(CoreMixin, CharmBase):
         logger.info("principal relation broken: %s", event.relation)
         self.unit.status = MaintenanceStatus("principal relation removed")
 
-    def _ensure_diagnostics(self):
+    def _ensure_diagnostics(self) -> str | None:
+        """Write the diagnostics plan: the operator's when set, else a generated one.
+
+        Returns a blocked-status message when the operator plan is invalid.
+        """
         diagnostics_raw = self.model.config.get("diagnostics", "")
 
         if diagnostics_raw:
-            self._apply_diagnostics_config(diagnostics_raw)
-        else:
-            self._generate_diagnostics()
+            error = self._apply_diagnostics_config(diagnostics_raw)
+            if error is None:
+                self._stored.diagnostics_from_config = True
+            return error
+        self._stored.diagnostics_from_config = False
+        self._generate_diagnostics()
+        return None
 
-    def _apply_diagnostics_config(self, diagnostics_raw):
+    def _apply_diagnostics_config(self, diagnostics_raw) -> str | None:
+        """Validate and write an operator plan; return an error message on failure."""
         try:
             plan = json.loads(diagnostics_raw)
         except json.JSONDecodeError as e:
             logger.error("diagnostics config is not valid JSON: %s", e)
-            self.unit.status = BlockedStatus("invalid diagnostics config (not JSON)")
-            return
+            return "invalid diagnostics config (not JSON)"
 
         errors = validate_diagnostics(plan)
         if errors:
             logger.error("diagnostics config validation failed: %s", errors)
-            self.unit.status = BlockedStatus(f"invalid diagnostics config: {errors[0]}")
-            return
+            return f"invalid diagnostics config: {errors[0]}"
 
         write_diagnostics_file(plan, self._diagnostics_path)
         logger.info("monitoring plan written to %s", self._diagnostics_path)
-        self.unit.status = ActiveStatus("Ready")
+        return None
 
-    def _generate_diagnostics(self):
+    def _generate_diagnostics(self) -> None:
+        """Generate the plan via the AI provider, falling back to an empty plan."""
         principal_name = self._get_principal_name()
         if not principal_name:
             logger.warning("no principal name available, skipping diagnostics generation")
-            self.unit.status = ActiveStatus("no principal to diagnose")
             return
 
         provider, _ = self._get_ai_provider()
         if provider is None:
             logger.info("no AI provider configured, writing empty monitoring plan")
-            plan = make_empty_plan(principal_name)
-            write_diagnostics_file(plan, self._diagnostics_path)
-            self.unit.status = ActiveStatus("Ready")
+            write_diagnostics_file(make_empty_plan(principal_name), self._diagnostics_path)
             return
 
         logger.info("generating diagnostics plan for '%s'", principal_name)
@@ -457,25 +439,19 @@ class JaimeCharm(CoreMixin, CharmBase):
                 raise ValueError("AI provider returned an empty response")
 
             plan = json.loads(stripped)
-            plan["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            plan["generated_at"] = utc_now_iso()
         except Exception as e:
             logger.error("Diagnostics plan generation failed: %s — falling back to empty plan", e)
-            plan = make_empty_plan(principal_name)
-            write_diagnostics_file(plan, self._diagnostics_path)
-            self.unit.status = ActiveStatus("Ready")
+            write_diagnostics_file(make_empty_plan(principal_name), self._diagnostics_path)
             return
 
         errors = validate_diagnostics(plan)
         if errors:
             logger.error("AI generated invalid monitoring plan: %s — falling back to empty plan", errors)
             plan = make_empty_plan(principal_name)
-            write_diagnostics_file(plan, self._diagnostics_path)
-            self.unit.status = ActiveStatus("Ready")
-            return
-
+        else:
+            logger.info("AI-generated monitoring plan written to %s", self._diagnostics_path)
         write_diagnostics_file(plan, self._diagnostics_path)
-        logger.info("AI-generated monitoring plan written to %s", self._diagnostics_path)
-        self.unit.status = ActiveStatus("Ready")
 
     def _principal_relations(self) -> list:
         """The ``principal`` relations, or none when the model cannot be read."""
@@ -509,7 +485,8 @@ class JaimeCharm(CoreMixin, CharmBase):
             event.fail("no principal unit related")
             return
 
-        context = self._collect_report_context(unit, "")
+        with self._hook_cache():
+            context = self._collect_context(unit, None)
         path = os.path.join(self._context_dir, f"{unit.replace('/', '-')}-context.json")
         try:
             os.makedirs(self._context_dir, exist_ok=True)

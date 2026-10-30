@@ -53,12 +53,15 @@ jobs:
         run: mdformat --check README.md docs/
 
   unit:
-    name: Unit (${{ matrix.suite.name }})
+    name: Unit (${{ matrix.suite.name }}, Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
       # Report every failing suite in one run rather than stopping at the first.
       fail-fast: false
       matrix:
+        # 3.10 is the interpreter of the ubuntu@22.04 bases; its stricter
+        # datetime.fromisoformat once hid a timestamp-parsing bug from CI.
+        python: ["3.10", "3.12"]
         suite:
           # `path` is explicit per suite. The shared job must target
           # tests/unit, not tests/, or it also collects tests/integration,
@@ -77,11 +80,11 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: pip
 
       - name: Install test dependencies
-        run: pip install pytest pytest-cov "ops>=2.10.0"
+        run: pip install pytest pytest-cov "ops>=3.4.0"
 
       # Each suite runs from its own directory so the matching pyproject.toml
       # supplies the correct pythonpath. The shared suite deliberately sees

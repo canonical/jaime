@@ -82,7 +82,7 @@ options:
     default: 5
   cooldown-minutes:
     type: int
-    description: "Minimum time before generating another report for the same unresolved incident."
+    description: "Minimum time between reports for the same unresolved incident. While a unit stays unhealthy, Jaime keeps one incident and writes a refreshed report version each time this period elapses, without calling the AI provider."
     default: 30
   log-window-minutes:
     type: int
@@ -94,11 +94,11 @@ options:
     default: 500
   report-dir:
     type: string
-    description: "Directory where Markdown report artifacts are written."
+    description: "Directory where Markdown report artifacts are written: <incident-id>.md for the first report, <incident-id>-<UTC timestamp>.md for refreshed versions."
     default: /var/log/jaime/reports
   audit-log-path:
     type: string
-    description: "Path to the structured JSONL audit log."
+    description: "Path to the structured JSONL audit log. Rotated at 10 MiB, keeping five numbered archives (<path>.1 is the newest)."
     default: /var/log/jaime/events.jsonl
   diagnostics:
     type: string
