@@ -607,6 +607,31 @@ Report-level compaction for high-volume machine sections (kept lossy-at-render, 
 - [x] [docs] Document `ask`/`list-suggestions` and the chat-integration usage (external bots calling `ask` per turn) in `docs/reference/`
 - [x] [charm] Remove the machine-only `diagnose` action (superseded by `show-status` and `generate-report`)
 
+### 4.16. Code review follow-ups: incident lifecycle and cleanup
+
+Correctness fixes and factorization from the October 2026 code review. The
+design is recorded in `ARCHITECTURE.md` (Core loop, Episodes, Monitoring status
+text, Usage accounting, Data flow, Filesystem layout, Audit events).
+
+- [x] [python] Parse Juju timestamps (`Z` suffix, nanosecond fractions) on Python 3.10, so `failure-timeout-minutes` is honoured on 22.04 bases
+- [x] [python] Keep one incident per unhealthy episode; after `cooldown-minutes`, refresh the report as a new version of the same incident, without an AI call
+- [x] [python] Record an incident only once its report is written; write `incident-report-failed` otherwise
+- [x] [python] Set the unit status once per cycle from the most severe per-unit result
+- [x] [python] `reset` writes closure rows for open incidents only
+- [x] [python] Never rewrite `<incident-id>.md`; write refreshed and regenerated reports as versions, and record the report version on the incident and on each turn
+- [x] [python] Attribute de-duplication markers to the line they summarise, and compute line patterns once
+- [x] [charm] Apply the machine `diagnostics` option on `config-changed`
+- [x] [python] Port checks read listening sockets only, from the uncapped `ss` output; an invalid `mode` fails actions cleanly; a malformed health command no longer aborts collection
+- [x] [python] Remove the unreachable act execution code and the unused legacy `Incident` suggestion API
+- [x] [python] Merge the per-charm collection hooks into one core method; share `watch-applications` parsing, config-changed flow and controller error handling; add time and unit-name helpers
+- [x] [python] Fetch `Client.FullStatus` at most once per hook
+- [x] [python] Run `snap list`/`snap services` once per collection; read log files from the tail with a byte bound; one shared error-window filter
+- [x] [python] Enforce `DIAGNOSTICS_SCHEMA` in `validate_diagnostics` (required sections, types, enums); `health_commands` unchanged
+- [x] [python] Rotate the audit log by size (10 MiB, five archives) and read the archives in `list-incidents`; cap `usage_log` at 200 entries per unit, folding older ones into per-model totals; fsync the state file
+- [x] [charm] Raise the machine charm `ops` floor to 3.4 (`ops.hookcmds`)
+- [x] [test] Unit tests for each fix
+- [x] [docs] Update `docs/reference/` and `CHANGELOG.md`
+
 ## 5. Phase 5 — CI/CD, integration tests and CharmHub release
 
 ### 5.1. Continuous integration
