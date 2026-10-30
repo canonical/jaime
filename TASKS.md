@@ -536,7 +536,7 @@ more evidence (4.5) makes this worse, so redaction is a prerequisite for it.
 Specified in `specs/261006-feature-redact-secrets/`: proposal, design,
 requirements and the task checklist.
 
-- [ ] Agree the change, then implement per its `tasks.md`
+- [x] Agree the change, then implement per its `tasks.md`
 
 ### 4.10. Documentation structure
 
@@ -709,17 +709,11 @@ this task automates subsequent releases.
 
 Today a subordinate Jaime unit runs per principal unit, so a multi-unit application produces one independent incident, one LLM call and one report per unit, with no view of the cluster.
 
-### 7.1. Leader aggregation
+Specified in `specs/261030-feature-clustered-operation/`: proposal, design,
+requirements and the task checklist. Depends on 6.1 (the compacted-context
+projection peers publish).
 
-- [ ] [charm] Add a peer relation to the machine subordinate
-- [ ] [charm] Followers publish compacted local context; the leader aggregates it
-- [ ] [charm] Key aggregation by monitored application, not by the peer set. Jaime units attached to different principals share one peer relation, so aggregating the peer set would merge unrelated workloads
-- [ ] [charm] Deduplicate when two Jaime units share a machine, which 4.3 only detects and reports
-- [ ] [charm] Make one LLM call per cluster incident, owned by the leader
-- [ ] [charm] Keep incident state in the peer application databag so it survives leader change
-- [ ] [python] Leader-owned usage accounting across all units
-- [ ] [python] Define the aggregation window across independent `update-status` cadences
-- [ ] [python] Keep unit-level detection; add cluster-level aggregation on top
+- [ ] Agree the change, then implement per its `tasks.md`
 
 ## 8. Phase 8 — Assisted remediation
 

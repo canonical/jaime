@@ -1,7 +1,7 @@
 # Proposal: Redact secrets from reports
 
 Type: feature
-Status: proposed
+Status: done
 
 Tracks `TASKS.md` 4.9. Gates the 0.1.0 CharmHub release (5.3).
 
