@@ -11,4 +11,5 @@ subordinate charm (`jaime`) and the Kubernetes standalone charm (`jaime-k8s`).
 :maxdepth: 1
 
 example_postgresql_plugins
+example_mysql_cluster_partition
 ```
