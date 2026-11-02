@@ -1,4 +1,4 @@
-# PostgreSQL plugin dependency misconfiguration
+# PostgreSQL plugin dependency misconfiguration (machine)
 
 This is a real incident handled end to end with the machine subordinate charm
 (`jaime`) and a PostgreSQL principal (`postgresql`), running in `suggest` mode.

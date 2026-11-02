@@ -1,4 +1,4 @@
-# MySQL mysqld service crash
+# MySQL mysqld service crash (machine)
 
 This is a real incident handled end to end with the machine subordinate charm
 (`jaime`) and a three-member MySQL InnoDB cluster (`mysql-innodb-cluster`),

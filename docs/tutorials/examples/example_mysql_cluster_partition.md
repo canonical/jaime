@@ -1,4 +1,4 @@
-# MySQL group replication port blocked
+# MySQL group replication port blocked (machine)
 
 This is a real incident handled end to end with the machine subordinate charm
 (`jaime`) and a three-member MySQL InnoDB cluster (`mysql-innodb-cluster`),

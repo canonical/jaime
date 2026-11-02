@@ -13,4 +13,7 @@ subordinate charm (`jaime`) and the Kubernetes standalone charm (`jaime-k8s`).
 example_postgresql_plugins
 example_mysql_cluster_partition
 example_mysql_service_crash
+example_alertmanager_config_error
+example_grafana_trust_blocked
+example_traefik_blocked_no_lb
 ```
