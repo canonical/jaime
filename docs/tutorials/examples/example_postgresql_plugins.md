@@ -51,22 +51,24 @@ juju run jaime/0 -- get-suggestion
 The action returns the diagnosis grounded in the incident report, with a single
 suggested command:
 
-    Running operation 388 with 1 task
-      - task 389 on unit-jaime-0
+````
+Running operation 388 with 1 task
+  - task 389 on unit-jaime-0
 
-    Waiting for task 389...
-    cached: "true"
-    command-count: "1"
-    commands: juju config postgresql plugin-postgis-enable=true
-    description: |-
-      The unit is blocked because `plugin-address-standardizer-enable=true` requires the PostGIS extension to be enabled first, but `plugin-postgis-enable=false`. Per the charm documentation at https://canonical-charmed-postgresql.readthedocs-hosted.com/16/, address standardizer depends on PostGIS. Enable PostGIS to satisfy the plugin dependency.
+Waiting for task 389...
+cached: "true"
+command-count: "1"
+commands: juju config postgresql plugin-postgis-enable=true
+description: |-
+  The unit is blocked because `plugin-address-standardizer-enable=true` requires the PostGIS extension to be enabled first, but `plugin-postgis-enable=false`. Per the charm documentation at https://canonical-charmed-postgresql.readthedocs-hosted.com/16/, address standardizer depends on PostGIS. Enable PostGIS to satisfy the plugin dependency.
 
-      ```bash
-      juju config postgresql plugin-postgis-enable=true
-      ```
-    generated-at: "2026-10-26T09:42:52.852709+00:00"
-    incident-id: 3405515f-5cbd-414b-8d7b-47145857e519
-    turn-id: "1"
+  ```bash
+  juju config postgresql plugin-postgis-enable=true
+  ```
+generated-at: "2026-10-26T09:42:52.852709+00:00"
+incident-id: 3405515f-5cbd-414b-8d7b-47145857e519
+turn-id: "1"
+````
 
 The diagnosis names the exact misconfiguration (`plugin-postgis-enable=false`),
 explains why it matters, and points at the charm's own documentation. Because the

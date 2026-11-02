@@ -54,22 +54,24 @@ jaime-k8s/0*         active   idle   10.1.0.109        incident open: alertmanag
 juju run jaime-k8s/0 -- get-suggestion
 ```
 
-    Running operation 259 with 1 task
-      - task 260 on unit-jaime-k8s-0
+````
+Running operation 259 with 1 task
+  - task 260 on unit-jaime-k8s-0
 
-    Waiting for task 260...
-    cached: "true"
-    command-count: "1"
-    commands: juju config alertmanager-k8s --reset config_file
-    description: |-
-      The unit is in error because the operator-set `config_file` value `route: [invalid` is malformed YAML. The charm's `update-status` hook fails while parsing this value with `yaml.parser.ParserError: while parsing a flow sequence`. Reset `config_file` to its default empty value so the charm can regenerate a valid Alertmanager configuration.
+Waiting for task 260...
+cached: "true"
+command-count: "1"
+commands: juju config alertmanager-k8s --reset config_file
+description: |-
+  The unit is in error because the operator-set `config_file` value `route: [invalid` is malformed YAML. The charm's `update-status` hook fails while parsing this value with `yaml.parser.ParserError: while parsing a flow sequence`. Reset `config_file` to its default empty value so the charm can regenerate a valid Alertmanager configuration.
 
-      ```bash
-      juju config alertmanager-k8s --reset config_file
-      ```
-    generated-at: "2026-11-02T19:24:06.376426+00:00"
-    incident-id: a09d2833-80ff-4bea-8991-7a4a774b2454
-    turn-id: "1"
+  ```bash
+  juju config alertmanager-k8s --reset config_file
+  ```
+generated-at: "2026-11-02T19:24:06.376426+00:00"
+incident-id: a09d2833-80ff-4bea-8991-7a4a774b2454
+turn-id: "1"
+````
 
 The diagnosis quotes the exact parser error from the charm log, identifies the
 operator-supplied value as the cause, and prescribes the documented reset.
@@ -112,8 +114,7 @@ jaime-k8s               active  1      jaime-k8s                    22  10.152.1
   hook; there is no `blocked` fanout to notice first.
 - jaime-k8s detected the error status through the Juju controller API, with no
   relation to alertmanager-k8s.
-- The suggestion was grounded in the actual charm log line (`ParserError:
-  while parsing a flow sequence`), so the reset was unambiguous.
+- The suggestion was grounded in the actual charm log line (`ParserError: while parsing a flow sequence`), so the reset was unambiguous.
 - The incident opened and closed on its own around the charm's update cycle -
   all recorded in `list-incidents`. For follow-up questions, use the `ask`
   action; see the [actions reference](../../reference/actions.md).

@@ -43,22 +43,24 @@ statefulsets.apps "grafana-k8s" is forbidden: User
 juju run jaime-k8s/0 -- get-suggestion
 ```
 
-    Running operation 265 with 1 task
-      - task 266 on unit-jaime-k8s-0
+````
+Running operation 265 with 1 task
+  - task 266 on unit-jaime-k8s-0
 
-    Waiting for task 266...
-    cached: "true"
-    command-count: "1"
-    commands: juju trust grafana-k8s
-    description: |-
-      The unit is blocked because the Grafana charm's Kubernetes service account lacks RBAC permission to get/patch the `grafana-k8s` StatefulSet. The workload containers are healthy; the failure is in the charm's Kubernetes resource patch operation. The status message explicitly instructs to grant trust to the application, which gives the charm's service account the required permissions in the model namespace.
+Waiting for task 266...
+cached: "true"
+command-count: "1"
+commands: juju trust grafana-k8s
+description: |-
+  The unit is blocked because the Grafana charm's Kubernetes service account lacks RBAC permission to get/patch the `grafana-k8s` StatefulSet. The workload containers are healthy; the failure is in the charm's Kubernetes resource patch operation. The status message explicitly instructs to grant trust to the application, which gives the charm's service account the required permissions in the model namespace.
 
-      ```bash
-      juju trust grafana-k8s
-      ```
-    generated-at: "2026-11-02T20:08:00.635123+00:00"
-    incident-id: 87bd4e07-5071-40fa-80f2-9286573be8a0
-    turn-id: "1"
+  ```bash
+  juju trust grafana-k8s
+  ```
+generated-at: "2026-11-02T20:08:00.635123+00:00"
+incident-id: 87bd4e07-5071-40fa-80f2-9286573be8a0
+turn-id: "1"
+````
 
 The suggestion separates the healthy workload from the RBAC failure and points
 at `juju trust` - the documented remedy named by the charm's own status message.

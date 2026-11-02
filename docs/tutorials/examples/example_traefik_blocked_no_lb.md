@@ -46,22 +46,24 @@ jaime-k8s/0*    active  idle  10.1.0.223   incident open: traefik-k8s/0 blocked 
 juju run jaime-k8s/0 -- get-suggestion
 ```
 
-    Running operation * with 1 task
-      - task * on unit-jaime-k8s-0
+````
+Running operation * with 1 task
+  - task * on unit-jaime-k8s-0
 
-    Waiting for task ...
-    cached: "true"
-    command-count: "1"
-    commands: juju config traefik-k8s external_hostname=traefik.example.com
-    description: |-
-      The unit is waiting because the Kubernetes `LoadBalancer` service backing Traefik has no external IP/hostname yet. The pod and containers are Running/Ready, so this is not a workload crash - the cluster is not providing a load balancer address. The `external_hostname` config does not bypass the charm's requirement for the LoadBalancer service to be ready.
+Waiting for task ...
+cached: "true"
+command-count: "1"
+commands: juju config traefik-k8s external_hostname=traefik.example.com
+description: |-
+  The unit is waiting because the Kubernetes `LoadBalancer` service backing Traefik has no external IP/hostname yet. The pod and containers are Running/Ready, so this is not a workload crash - the cluster is not providing a load balancer address. The `external_hostname` config does not bypass the charm's requirement for the LoadBalancer service to be ready.
 
-      ```bash
-      juju config traefik-k8s external_hostname=traefik.example.com
-      ```
-    generated-at: "2026-11-02T20:53:47.176451+00:00"
-    incident-id: 58656225-8d8e-4e02-8c9d-806d841c1a7c
-    turn-id: "1"
+  ```bash
+  juju config traefik-k8s external_hostname=traefik.example.com
+  ```
+generated-at: "2026-11-02T20:53:47.176451+00:00"
+incident-id: 58656225-8d8e-4e02-8c9d-806d841c1a7c
+turn-id: "1"
+````
 
 Applying it moves Traefik from `blocked` to `waiting`:
 
@@ -97,26 +99,28 @@ juju run jaime-k8s/0 -- ask incident-id=58656225-8d8e-4e02-8c9d-806d841c1a7c \
   question='Why is the LoadBalancer service still without an external address?'
 ```
 
-    Running operation 297 with 1 task
-      - task 298 on unit-jaime-k8s-0
+```
+Running operation 297 with 1 task
+  - task 298 on unit-jaime-k8s-0
 
-    Waiting for task 298...
-    command-count: "0"
-    commands: ""
-    completion-tokens: "639"
-    cost-usd: "0.002822"
-    description: The LoadBalancer service still has no external address because the Kubernetes
-      cluster has not assigned one - no load balancer provider is supplying an external
-      IP. The pod and containers are Running/Ready, so Traefik itself is fine; the missing
-      piece is the cluster's load balancer implementation, typically MetalLB with an available
-      IP range. Check that MetalLB is enabled and that the CIDR has addresses it can allocate
-      from.
-    generated-at: "2026-11-02T20:54:31.378884+00:00"
-    incident-id: 58656225-8d8e-4e02-8c9d-806d841c1a7c
-    model: ~deepseek/deepseek-v4-flash-latest
-    prompt-tokens: "22435"
-    total-tokens: "23074"
-    turn-id: "2"
+Waiting for task 298...
+command-count: "0"
+commands: ""
+completion-tokens: "639"
+cost-usd: "0.002822"
+description: The LoadBalancer service still has no external address because the Kubernetes
+  cluster has not assigned one - no load balancer provider is supplying an external
+  IP. The pod and containers are Running/Ready, so Traefik itself is fine; the missing
+  piece is the cluster's load balancer implementation, typically MetalLB with an available
+  IP range. Check that MetalLB is enabled and that the CIDR has addresses it can allocate
+  from.
+generated-at: "2026-11-02T20:54:31.378884+00:00"
+incident-id: 58656225-8d8e-4e02-8c9d-806d841c1a7c
+model: ~deepseek/deepseek-v4-flash-latest
+prompt-tokens: "22435"
+total-tokens: "23074"
+turn-id: "2"
+```
 
 The second turn makes the environmental cause explicit: the workload is
 healthy, the **cluster's load balancer is not allocating addresses**. That is

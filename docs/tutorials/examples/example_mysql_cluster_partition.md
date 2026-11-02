@@ -74,23 +74,25 @@ failure, and the firewall rules show the `DROP`.
 juju run jaime/6 -- get-suggestion
 ```
 
-    Running operation 19 with 1 task
-      - task 20 on unit-jaime-6
+````
+Running operation 19 with 1 task
+  - task 20 on unit-jaime-6
 
-    Waiting for task 20...
-    cached: "true"
-    command-count: "1"
-    commands: juju ssh mysql-innodb-cluster/5 -- sudo iptables -D INPUT -p tcp --dport
-      33061 -j DROP && juju run mysql-innodb-cluster/5 restart-services
-    description: |-
-      Root cause: the unit was expelled from the InnoDB cluster and auto-rejoin failed because nftables/iptables is dropping TCP `33061`, the Group Replication GCS port. The MySQL error log explicitly shows `[GCS] failed to test connectivity to the local group communication engine on 10.82.123.128:33061`, and the firewall rules confirm a `DROP` on `dport 33061`. Per the charm docs (https://discourse.charmhub.io/t/mysql-innodb-cluster-docs-index/11009), this port must be open for cluster communication. Remove the drop rule and restart the MySQL service so the node can rejoin.
+Waiting for task 20...
+cached: "true"
+command-count: "1"
+commands: juju ssh mysql-innodb-cluster/5 -- sudo iptables -D INPUT -p tcp --dport
+  33061 -j DROP && juju run mysql-innodb-cluster/5 restart-services
+description: |-
+  Root cause: the unit was expelled from the InnoDB cluster and auto-rejoin failed because nftables/iptables is dropping TCP `33061`, the Group Replication GCS port. The MySQL error log explicitly shows `[GCS] failed to test connectivity to the local group communication engine on 10.82.123.128:33061`, and the firewall rules confirm a `DROP` on `dport 33061`. Per the charm docs (https://discourse.charmhub.io/t/mysql-innodb-cluster-docs-index/11009), this port must be open for cluster communication. Remove the drop rule and restart the MySQL service so the node can rejoin.
 
-      ```bash
-      juju ssh mysql-innodb-cluster/5 -- sudo iptables -D INPUT -p tcp --dport 33061 -j DROP && juju run mysql-innodb-cluster/5 restart-services
-      ```
-    generated-at: "2026-11-01T07:57:24.975102+00:00"
-    incident-id: 0f0bfccb-c4a9-44b1-bdba-46d875f52414
-    turn-id: "1"
+  ```bash
+  juju ssh mysql-innodb-cluster/5 -- sudo iptables -D INPUT -p tcp --dport 33061 -j DROP && juju run mysql-innodb-cluster/5 restart-services
+  ```
+generated-at: "2026-11-01T07:57:24.975102+00:00"
+incident-id: 0f0bfccb-c4a9-44b1-bdba-46d875f52414
+turn-id: "1"
+````
 
 The diagnosis names the port, quotes the actual error-log evidence, and explains
 why the firewall rule breaks membership. The suggested command is the complete

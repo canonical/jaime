@@ -78,22 +78,24 @@ mysql-innodb-cluster/8  blocked   idle   11       10.82.123.211          Service
 juju run jaime/9 -- get-suggestion
 ```
 
-    Running operation 23 with 1 task
-      - task 24 on unit-jaime-9
+````
+Running operation 23 with 1 task
+  - task 24 on unit-jaime-9
 
-    Waiting for task 24...
-    cached: "true"
-    command-count: "1"
-    commands: juju run mysql-innodb-cluster/8 restart-services
-    description: |-
-      The unit is blocked because `mysqld` is not running: `mysql.service` is in a failed state after repeated start attempts, and ports `3306`, `33060`, and `33061` are not listening. The MySQL error log shows Group Replication failing to join peers, preventing the service from becoming healthy. The `LC_ALL` locale errors are affecting `mysqlsh` health checks, but the immediate blocker is the down MySQL service. Per the charm docs linked in the report, `restart-services` is the charm action for starting the managed services.
+Waiting for task 24...
+cached: "true"
+command-count: "1"
+commands: juju run mysql-innodb-cluster/8 restart-services
+description: |-
+  The unit is blocked because `mysqld` is not running: `mysql.service` is in a failed state after repeated start attempts, and ports `3306`, `33060`, and `33061` are not listening. The MySQL error log shows Group Replication failing to join peers, preventing the service from becoming healthy. The `LC_ALL` locale errors are affecting `mysqlsh` health checks, but the immediate blocker is the down MySQL service. Per the charm docs linked in the report, `restart-services` is the charm action for starting the managed services.
 
-      ```bash
-      juju run mysql-innodb-cluster/8 restart-services
-      ```
-    generated-at: "2026-11-02T18:36:18.272209+00:00"
-    incident-id: e6a70aaf-6880-4ecb-8087-142d98e59b12
-    turn-id: "1"
+  ```bash
+  juju run mysql-innodb-cluster/8 restart-services
+  ```
+generated-at: "2026-11-02T18:36:18.272209+00:00"
+incident-id: e6a70aaf-6880-4ecb-8087-142d98e59b12
+turn-id: "1"
+````
 
 The diagnosis reads the failed state, the missing listeners and the Group
 Replication log, separates the real blocker (the down service) from the noise
