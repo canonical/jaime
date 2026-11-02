@@ -20,8 +20,8 @@ dependency to be enabled first. The unit goes `blocked` with a generic message:
 
 ## The incident opens
 
-After `failure-timeout-minutes` (default 5) with the unit still `blocked`, Jaime
-opens an incident and reports it in its own status:
+After `failure-timeout-minutes` (default five) with the unit still `blocked`,
+Jaime opens an incident and reports it in its own status:
 
 ```text
 Model  Controller  Cloud/Region         Version  SLA          Timestamp

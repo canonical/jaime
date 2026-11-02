@@ -31,7 +31,7 @@ mysql-innodb-cluster/8   active    idle   11       10.82.123.211          Unit i
 ```
 
 The workload runs `mysql.service`, which has `Restart=on-failure` with a start
-limit: five failed starts in ten seconds stop the retries and leave the unit
+limit: five failed starts in 10 seconds stop the retries and leave the unit
 `failed`. A single `SIGKILL` therefore only causes churn - it takes a short
 crash loop to break the service for real:
 

@@ -21,12 +21,15 @@ The pod is fine; the `LoadBalancer` service behind it is the problem. On the
 cluster node (`k8s-dev`), the load balancer configuration shows the empty pool:
 
 ```text
-$ sudo k8s get load-balancer
+sudo k8s get load-balancer
 enabled: true
-cidrs: []          # <-- no range to allocate from
+cidrs: []
 l2-mode: false
 l2-interfaces: []
 ```
+
+The `cidrs: []` line is the smoking gun: MetalLB has no range to allocate an
+address from.
 
 ## The incident opens
 
