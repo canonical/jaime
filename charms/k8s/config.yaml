@@ -92,6 +92,20 @@ options:
     type: int
     description: "Per-item cap on collected lines. Some sections apply a tighter cap (for example socket statistics and firewall rules). This is not a report or prompt total."
     default: 500
+  max-prompt-bytes:
+    type: int
+    description: >
+      Byte budget for the prompt built from the stored report in suggest/act
+      mode. The report itself is never bounded by this; only the copy sent to
+      the AI provider is. Tier-1 content (executive summary, recent logs,
+      failure indicators, available actions, charm links) is always included
+      and only individually capped; tier-2 content (processes, network ports,
+      plan log files, snap status, health commands) is included while the
+      budget allows and otherwise named as omitted; tier-3 content (disk,
+      memory, network connections, firewall rules, charm config) is always
+      reduced to a short digest, regardless of this budget. 0 disables
+      projection: the full report is sent as the prompt.
+    default: 60000
   report-dir:
     type: string
     description: "Directory where Markdown report artifacts are written: <incident-id>.md for the first report, <incident-id>-<UTC timestamp>.md for refreshed versions."

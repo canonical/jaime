@@ -62,6 +62,9 @@ options:
   audit-log-path:
     type: string
     default: /var/log/jaime/events.jsonl
+  max-prompt-bytes:
+    type: int
+    default: 0
 """
 
 
@@ -856,6 +859,70 @@ class TestAskAction:
         assert len(records) == 2
         assert records[0]["question"] == ""
         assert records[1]["description"] == "b"
+
+
+class TestRunModeLogicProjection:
+    """``_run_mode_logic`` bounds the prompt via ``max-prompt-bytes``, not the report."""
+
+    _REPORT = (
+        "# Incident Report\n"
+        "- incident: abc\n"
+        "- unit: foo/0\n"
+        "- status: blocked\n\n"
+        "## Executive summary\nUnit is in **blocked** state.\n\n"
+        "## Disk usage\n```\n" + "\n".join(f"/dev/sda{i} {i}G used" for i in range(40)) + "\n```\n\n"
+        "## Processes\n" + "\n".join(f"- process-{i}: running" for i in range(40)) + "\n"
+    )
+
+    def _harness_with_provider(self, config, provider):
+        h = _make_harness(config)
+        h._provider_patch = mock.patch.object(h.charm, "_get_ai_provider", return_value=(provider, None))
+        h._provider_patch.start()
+        provider.check.return_value = None
+        return h
+
+    def test_zero_budget_sends_the_report_unprojected(self):
+        provider = mock.MagicMock()
+        provider.generate.return_value = ("diagnosis\n```bash\ncmd\n```", None)
+        h = self._harness_with_provider({"mode": "suggest", "provider": "gemini", "api-token": "t"}, provider)
+        h.charm._run_mode_logic(self._REPORT)
+        sent_prompt = provider.generate.call_args[0][0]
+        assert self._REPORT in sent_prompt
+        assert h.charm._last_projection is None
+
+    def test_nonzero_budget_projects_the_prompt_not_the_report(self):
+        provider = mock.MagicMock()
+        provider.generate.return_value = ("diagnosis\n```bash\ncmd\n```", None)
+        h = self._harness_with_provider(
+            {"mode": "suggest", "provider": "gemini", "api-token": "t", "max-prompt-bytes": 50}, provider
+        )
+        h.charm._run_mode_logic(self._REPORT)
+        sent_prompt = provider.generate.call_args[0][0]
+        assert "digested for the prompt" in sent_prompt
+        assert "## Executive summary" in sent_prompt
+
+    def test_projection_metadata_is_recorded_for_the_audit_event(self):
+        provider = mock.MagicMock()
+        provider.generate.return_value = ("diagnosis", None)
+        h = self._harness_with_provider(
+            {"mode": "suggest", "provider": "gemini", "api-token": "t", "max-prompt-bytes": 50}, provider
+        )
+        h.charm._run_mode_logic(self._REPORT)
+        assert h.charm._last_projection["version"] >= 1
+        assert h.charm._last_projection["budget_bytes"] == 50
+        assert h.charm._last_projection["report_bytes"] == len(self._REPORT.encode())
+        assert h.charm._last_projection["prompt_bytes"] < h.charm._last_projection["report_bytes"]
+
+    def test_ask_is_projected_too(self):
+        provider = mock.MagicMock()
+        provider.generate.return_value = ("an answer", None)
+        h = self._harness_with_provider(
+            {"mode": "suggest", "provider": "gemini", "api-token": "t", "max-prompt-bytes": 50}, provider
+        )
+        h.charm._run_mode_logic(self._REPORT, question="what is wrong?")
+        sent_prompt = provider.generate.call_args[0][0]
+        assert "digested for the prompt" in sent_prompt
+        assert "what is wrong?" in sent_prompt
 
 
 class TestProviderCheckCache:
