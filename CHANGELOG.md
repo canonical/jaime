@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-03
+
+Jaime 0.1.2 adds a conversational flow (`ask` appends a turn, `list-suggestions`
+prints the conversation), a `remote` AI provider for local OpenAI-compatible
+servers, the monitored application's charm details in the report header, an
+always-on snap inventory with bounded journal sampling in machine reports, and
+incident reports that are versioned across cooldown refreshes instead of being
+overwritten. It is intended for the `0.1/stable` channel.
+
 ### Features
 
 - Add a `remote` provider for any server that speaks the OpenAI Chat Completions protocol (Ollama, llama.cpp, vLLM, LiteLLM). `provider-remote-url` points at the server's `/v1` root and is required with `provider=remote`; `api-token` is optional, with no `Authorization` header sent when it is empty; `remote` has no provider-default model. Setting `provider-remote-url` with `gemini` or `openrouter` blocks the unit. Answers are awaited for up to ten minutes, so slow local models do not time out
