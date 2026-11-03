@@ -81,6 +81,6 @@ tutorials/index
 how-to/index
 reference/index
 explanation/index
-release-notes/index
-contribute/index
+Release notes <https://github.com/canonical/jaime/releases>
+Contribute <https://github.com/canonical/jaime/blob/main/CONTRIBUTING.md>
 ```

@@ -100,3 +100,11 @@ llama
 LiteLLM
 vLLM
 boolean
+Alertmanager
+Alertmanager's
+fanout
+untrusted
+mysqld
+auditable
+misconfiguration
+standardizer

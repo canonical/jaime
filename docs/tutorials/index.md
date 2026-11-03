@@ -6,8 +6,10 @@ new to Jaime.
 ## Table of contents
 
 ```{toctree}
-:maxdepth: 1
+:maxdepth: 2
 
 getting_started
 getting_started_k8s
+
+examples/index
 ```

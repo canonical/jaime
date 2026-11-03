@@ -967,10 +967,11 @@ consequence of it: relating the subordinate is the opt-in.
 Machine subordinate:
 
 ```text
-diagnose
 collect-context
 generate-report
 get-suggestion [additional-context]
+ask [question] [incident-id]
+list-suggestions [incident-id]
 show-status
 show-usage [incident-id]
 list-incidents [unit]
@@ -983,13 +984,15 @@ Kubernetes standalone:
 show-setup-steps
 generate-report
 get-suggestion [additional-context]
+ask [question] [incident-id]
+list-suggestions [incident-id]
 show-status
 show-usage [incident-id]
 list-incidents [unit]
 reset
 ```
 
-`diagnose` and `collect-context` are machine-only. All actions are read-only
+`collect-context` is machine-only. All actions are read-only
 with respect to the monitored workload. `list-incidents` reads the audit log
 and correlates each incident's start, report and closure events, including
 the workload status message captured when the incident opened; incidents
