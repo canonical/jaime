@@ -155,15 +155,7 @@ class K8sApiClient:
         return [line.rstrip() for line in result.splitlines() if line.strip()]
 
     def get_pod_events(self, pod_name: str, limit: int = 50) -> list[str]:
-        """Return Kubernetes events for a pod as formatted text lines.
-
-        Each line is ``<timestamp> <type> <reason> <message>``, with a
-        `` ×N`` suffix when the event's own ``count`` is greater than one -
-        the same repeat-count convention ``compact_log_lines`` uses elsewhere
-        in the report. A repeated event (e.g. ``BackOff`` firing 14 times) is
-        a stronger signal than a single occurrence, and this was previously
-        discarded.
-        """
+        """Return Kubernetes events for a pod as formatted text lines."""
         path = f"/api/v1/namespaces/{self.namespace}/events"
         data = self._request(
             path,
@@ -180,9 +172,7 @@ class K8sApiClient:
             key=lambda e: e.get("lastTimestamp") or e.get("firstTimestamp") or "",
         ):
             ts = event.get("lastTimestamp") or event.get("firstTimestamp") or ""
-            count = event.get("count") or 1
-            suffix = f" ×{count}" if count > 1 else ""
-            lines.append(f"{ts} {event.get('type', '')} {event.get('reason', '')} {event.get('message', '')}{suffix}")
+            lines.append(f"{ts} {event.get('type', '')} {event.get('reason', '')} {event.get('message', '')}")
         return lines
 
     def get_resource_usage(self, pod_name: str) -> list[str]:
