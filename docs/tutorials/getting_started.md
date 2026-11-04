@@ -19,9 +19,18 @@ juju deploy jaime --channel=0.1/stable
 juju deploy postgresql --channel 16/stable
 
 # Optional: enable AI-assisted diagnosis now, before relating
-SECRET_URI=$(juju add-secret jaime-token token=<your-api-token>)
+API_TOKEN=sk-...
+SECRET_URI=$(juju add-secret jaime-token token=${API_TOKEN})
 juju grant-secret jaime-token jaime
 juju config jaime mode=suggest provider=gemini api-token="${SECRET_URI}"
+
+# Optional (controller connection)
+NEW_PASS=$(openssl rand -hex 16)
+echo "$NEW_PASS" | juju change-user-password jaime-observer --no-prompt
+
+SECRET_URI=$(juju add-secret jaime-juju-api password="$NEW_PASS")
+juju grant-secret jaime-juju-api jaime        
+juju config jaime juju-api-user=jaime-observer juju-api-password="${SECRET_URI}"
 
 juju relate postgresql jaime
 ```

@@ -61,7 +61,8 @@ juju config jaime-k8s juju-api-user=jaime-observer juju-api-password="${SECRET_U
 ### Enable AI-assisted diagnosis (optional)
 
 ```bash
-AI_SECRET=$(juju add-secret jaime-token token=<your-api-token>)
+API_TOKEN=sk-...
+AI_SECRET=$(juju add-secret jaime-token token=${API_TOKEN})
 juju grant-secret jaime-token jaime-k8s
 juju config jaime-k8s mode=suggest provider=gemini api-token="${AI_SECRET}"
 ```
