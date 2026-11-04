@@ -24,6 +24,10 @@ requires:
     interface: juju-info
     scope: container
 
+provides:
+  cos-agent:
+    interface: cos_agent
+
 platforms:
   ubuntu-22.04-amd64:
     build-on:

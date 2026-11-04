@@ -5,7 +5,9 @@ import datetime
 import json
 import logging
 import os
+import threading
 
+from charms.grafana_agent.v0.cos_agent import COSAgentProvider
 from ops import JujuContext
 from ops.charm import CharmBase
 from ops.framework import StoredState
@@ -28,6 +30,7 @@ from jaime.diagnostics import (
     validate_diagnostics,
     write_diagnostics_file,
 )
+from jaime.metrics import METRICS_PORT, create_metrics_server, render_metrics
 from jaime.names import app_of
 from jaime.principal import StatusTracker
 from jaime.timeutil import utc_now_iso
@@ -39,11 +42,19 @@ class JaimeCharm(CoreMixin, CharmBase):
     _diagnostics_dir = "/var/lib/jaime"
     _diagnostics_path = f"{_diagnostics_dir}/diagnostics.json"
     _context_dir = "/var/lib/jaime/incidents"
+    _metrics_port = METRICS_PORT
+    _dashboard_dir = "src/grafana_dashboards"
     _stored = StoredState()
 
     def __init__(self, *args):
         super().__init__(*args)
         self._status_tracker = StatusTracker()
+        self._cos_agent = COSAgentProvider(
+            self,
+            metrics_endpoints=[{"path": "/metrics", "port": self._metrics_port}],
+            dashboard_dirs=[self._dashboard_dir],
+        )
+        self._start_metrics_server()
         # Whether the plan on disk came from the diagnostics option, so that
         # clearing the option regenerates it instead of keeping a stale plan.
         self._stored.set_default(diagnostics_from_config=False)
@@ -63,6 +74,26 @@ class JaimeCharm(CoreMixin, CharmBase):
         self.framework.observe(self.on.show_usage_action, self._on_action_show_usage)
         self.framework.observe(self.on.list_incidents_action, self._on_action_list_incidents)
         self.framework.observe(self.on.reset_action, self._on_action_reset)
+
+    def _start_metrics_server(self):
+        """Serve ``/metrics`` for the COS scrape targets, in a daemon thread.
+
+        The endpoint reflects the tracker in this hook process. A durable
+        scrape target requires the metrics process to outlive a single hook;
+        that is covered by the systemd-managed metrics service.
+        """
+        try:
+            server = create_metrics_server(
+                lambda: render_metrics(self._status_tracker),
+                port=self._metrics_port,
+            )
+            threading.Thread(
+                target=server.serve_forever,
+                daemon=True,
+                name="jaime-metrics",
+            ).start()
+        except OSError as e:
+            logger.warning("metrics server unavailable on port %s: %s", self._metrics_port, e)
 
     # ------------------------------------------------------------------
     # Monitoring

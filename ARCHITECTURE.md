@@ -864,18 +864,16 @@ and AI calls), never the monitored workload, which reports through its own
 - Meter names `jaime_*`:
 
   ```text
-  # Incidents - one series per monitored unit
+  # Incidents - one series per monitored unit with an open incident
   jaime_incidents_open{unit}                    gauge
-  jaime_incidents_total{unit}                   counter   (lifetime opened)
   # AI usage - one series per model
+  jaime_llm_calls_total{model}                  counter
   jaime_llm_tokens_total{model,role}            counter   (role: prompt|completion)
   jaime_llm_cost_total{model}                   counter   (USD, providers that report it)
-  jaime_llm_in_use{model}                       gauge     (1 for the active model)
   ```
 
   `prompt_tokens`, `completion_tokens`, `cost_usd` and `model` come straight
-  from `UsageMetadata`; open/lifetime incidents from the status tracker and the
-  audit log.
+  from `UsageMetadata`; open incidents from the status tracker.
 - Ship a Grafana dashboard JSON under `src/grafana_dashboards/` (incident +
   token/cost panels) and, later, Prometheus alert rules under
   `src/prometheus_alert_rules/`. Both are uploaded by the `cos-agent`
@@ -884,6 +882,11 @@ and AI calls), never the monitored workload, which reports through its own
   library, bundled the way `chrony-client-operator` bundles it) so the scrape
   target, dashboard and rule hand-off are handled by the shared library rather
   than hand-rolled.
+- Serving: a hook process only lives for the duration of the hook, so the
+  stdlib HTTP handler is not by itself durable. A scrapeable `/metrics` needs a
+  small systemd-managed metrics process that reads the tracker state and serves
+  between hooks, the way chrony runs its exporter. The in-process handler is
+  the first slice; the durable service is a follow-up in TASKS 9.1.
 
 ### Kubernetes standalone (deferred)
 
