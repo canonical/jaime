@@ -1,9 +1,14 @@
 {
-  "annotations": { "list": [] },
-  "description": "Jaime — incidents and AI usage at a glance",
+  "annotations": {
+    "list": []
+  },
+  "description": "Jaime \u2014 incidents and AI usage at a glance",
   "id": null,
   "title": "Jaime",
-  "tags": ["jaime", "cos-agent"],
+  "tags": [
+    "jaime",
+    "cos-agent"
+  ],
   "schemaVersion": 37,
   "version": 2,
   "panels": [
@@ -11,8 +16,16 @@
       "id": 1,
       "type": "stat",
       "title": "Open incidents",
-      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "sum by (unit) (jaime_incidents_open)",
@@ -25,8 +38,14 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
             ]
           }
         },
@@ -37,8 +56,16 @@
       "id": 2,
       "type": "stat",
       "title": "Monitored units",
-      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
-      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "sum(jaime_monitored_units)",
@@ -46,14 +73,25 @@
           "refId": "A"
         }
       ],
-      "fieldConfig": { "defaults": {}, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
     },
     {
       "id": 3,
       "type": "stat",
       "title": "Unhealthy units",
-      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
       "targets": [
         {
           "expr": "sum(jaime_unit_unhealthy)",
@@ -66,8 +104,14 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
             ]
           }
         },
@@ -78,68 +122,193 @@
       "id": 4,
       "type": "timeseries",
       "title": "Tokens by model",
-      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "targets": [
         {
-          "expr": "sum by (model) (rate(jaime_llm_tokens_total[$__rate_interval]))",
+          "expr": "sum by (model) (increase(jaime_llm_tokens_total[$__range]))",
           "legendFormat": "{{model}}",
           "refId": "A"
         }
       ],
-      "fieldConfig": { "defaults": {}, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "last",
+            "sum",
+            "mean",
+            "max",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "all"
+        }
+      }
     },
     {
       "id": 5,
       "type": "timeseries",
       "title": "LLM cost (USD)",
-      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
       "targets": [
         {
-          "expr": "sum by (model) (rate(jaime_llm_cost_total[$__rate_interval]))",
+          "expr": "sum by (model) (increase(jaime_llm_cost_total[$__range]))",
           "legendFormat": "{{model}}",
           "refId": "A"
         }
       ],
-      "fieldConfig": { "defaults": {}, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "last",
+            "sum",
+            "mean",
+            "max",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "all"
+        }
+      }
     },
     {
       "id": 6,
       "type": "timeseries",
       "title": "Token split (prompt vs completion)",
-      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
       "targets": [
         {
-          "expr": "sum by (role) (rate(jaime_llm_tokens_total[$__rate_interval]))",
+          "expr": "sum by (role) (increase(jaime_llm_tokens_total[$__range]))",
           "legendFormat": "{{role}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 10, "stacking": { "mode": "normal" } } },
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "last",
+            "sum",
+            "mean",
+            "max",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "all"
+        }
       }
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "LLM calls",
-      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheusds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
       "targets": [
         {
-          "expr": "sum by (model) (rate(jaime_llm_calls_total[$__rate_interval]))",
+          "expr": "sum by (model) (increase(jaime_llm_calls_total[$__range]))",
           "legendFormat": "{{model}}",
           "refId": "A"
         }
       ],
-      "fieldConfig": { "defaults": {}, "overrides": [] }
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "last",
+            "sum",
+            "mean",
+            "max",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "all"
+        }
+      }
     }
   ],
-  "templating": { "list": [] },
-  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
   "timezone": "utc",
   "refresh": "30s"
 }
