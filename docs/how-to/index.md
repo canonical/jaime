@@ -20,6 +20,14 @@ watch_co_located_units
 configure_diagnostics_plan
 ```
 
+## Observability
+
+```{toctree}
+:maxdepth: 1
+
+integrate_with_cos
+```
+
 ## Incidents
 
 ```{toctree}
