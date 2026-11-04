@@ -28,7 +28,8 @@ Juju model
         ├── incident tracker
         ├── JSONL audit logger
         ├── report generator
-        └── AI provider adapter, optional
+        ├── AI provider adapter, optional
+        └── cos-agent provider + `/metrics` endpoint, opt-in by relation
 ```
 
 ### Kubernetes standalone
@@ -840,6 +841,67 @@ yields no command, never a guessed one.
 AI output is never the only record. The non-AI Markdown report containing the
 collected evidence is persisted before the provider is called, and the
 suggestion references the incident it was generated from.
+
+## Observability
+
+Jaime exposes its own operation - incidents, AI usage, provider and model - to
+the Canonical Observability Stack (COS) through the standard `cos-agent`
+interface, mirroring how `chrony-client-operator` does it. Jaime is the
+*provider* side: it serves a Prometheus-format `/metrics` endpoint and hands the
+COS agent the scrape target and a shipped Grafana dashboard over the
+`cos-agent` relation databag. This telemetry is about **jaime** (its incidents
+and AI calls), never the monitored workload, which reports through its own
+`cos-agent`.
+
+### Machine subordinate (first slice)
+
+- Add a `provides: cos-agent` (interface `cos_agent`) relation to the machine
+  charm metadata, as a unit-level relation co-located with the principal.
+- Serve a small Prometheus `text/plain` `/metrics` endpoint with the stdlib
+  `http.server` (a background thread), bound to a fixed host port on the
+  principal's machine. It renders from data jaime already keeps - the incident
+  tracker, the audit log and the usage ledger - so no new data model is added.
+- Meter names `jaime_*`:
+
+  ```text
+  # Incidents - one series per monitored unit
+  jaime_incidents_open{unit}                    gauge
+  jaime_incidents_total{unit}                   counter   (lifetime opened)
+  # AI usage - one series per model
+  jaime_llm_tokens_total{model,role}            counter   (role: prompt|completion)
+  jaime_llm_cost_total{model}                   counter   (USD, providers that report it)
+  jaime_llm_in_use{model}                       gauge     (1 for the active model)
+  ```
+
+  `prompt_tokens`, `completion_tokens`, `cost_usd` and `model` come straight
+  from `UsageMetadata`; open/lifetime incidents from the status tracker and the
+  audit log.
+- Ship a Grafana dashboard JSON under `src/grafana_dashboards/` (incident +
+  token/cost panels) and, later, Prometheus alert rules under
+  `src/prometheus_alert_rules/`. Both are uploaded by the `cos-agent`
+  provider.
+- Use the vendored `COSAgentProvider` (the `grafana_agent.v0.cos_agent`
+  library, bundled the way `chrony-client-operator` bundles it) so the scrape
+  target, dashboard and rule hand-off are handled by the shared library rather
+  than hand-rolled.
+
+### Kubernetes standalone (deferred)
+
+The k8s variant will provide `cos-agent` with `ServiceMonitor` semantics (the
+same interface; the COS scraper collects through the Service). Not part of this
+slice; see TASKS.
+
+### Boundaries and costs
+
+- The endpoint is about jaime only; the principal charm owns its own `cos-agent`.
+  There is no standalone exporter binary (jaime has none, and a pure-Python
+  handler covers the small endpoint - this differs from chrony, which runs a
+  compiled Go exporter). No HTTP endpoint is added to the monitored workload.
+- Metrics are read-only and advisory; nothing is injected into jaime's incident
+  lifecycle.
+- A fixed host port must stay free next to the principal's workload. The scrape
+  target flows through the relation, so an `opentelemetry-collector`,
+  `prometheus-scrape` or `grafana-agent` can all collect it.
 
 ## Filesystem layout
 
