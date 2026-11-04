@@ -19,7 +19,7 @@ links:
   source:
     - https://github.com/canonical/jaime
 
-version: "0.1.0"
+version: "0.1.2"
 platforms:
   ubuntu-22.04-amd64:
     build-on:
@@ -55,9 +55,15 @@ platforms:
       - ubuntu@26.04:arm64
 
 parts:
+  uv-deps:
+    plugin: nil
+    build-snaps:
+      - astral-uv
   charm:
     plugin: uv
     source: .
+    after:
+      - uv-deps
     build-snaps:
       - astral-uv
     override-build: |
