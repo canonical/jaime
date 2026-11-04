@@ -779,17 +779,16 @@ Stack through the `cos-agent` interface, mirroring `chrony-client-operator`.
 Machine subordinate first; the k8s `ServiceMonitor` variant follows. The design
 is in `ARCHITECTURE.md` (Observability).
 
-### 9.1. cos-agent relation and metrics endpoint (machine)
+### 9.1. cos-agent relation and OTLP export (machine)
 
 - [ ] [charm] Add `provides: cos-agent` (interface `cos_agent`) to `charms/machine/charmcraft.yaml`
 - [ ] [charm] Vendor the `COSAgentProvider` library (`grafana_agent.v0.cos_agent`) into `charms/machine/lib/`
-- [ ] [python] Add a stdlib `http.server` `/metrics` endpoint (background thread) bound to a fixed host port, rendering `jaime_*` metrics in Prometheus text format
-- [ ] [python] Emit incident metrics (`jaime_incidents_open`, `jaime_incidents_total`) from the status tracker and audit log, per monitored unit
-- [ ] [python] Emit AI-usage metrics (`jaime_llm_tokens_total{model,role}`, `jaime_llm_cost_total{model}`) from `UsageMetadata`, and `jaime_llm_in_use{model}`
-- [ ] [charm] Wire `COSAgentProvider` with `metrics_endpoints` and `dashboard_dirs`
+- [ ] [python] Build an OTLP/JSON `jaime_*` metrics payload (monitoring gauges and per-model usage sums) from the status tracker and usage ledger
+- [ ] [chardm] Push the payload to the co-located `opentelemetry-collector` OTLP/HTTP receiver (`127.0.0.1:4318`) on each `update-status`, which remote-writes it to Prometheus
+- [ ] [charm] Wire `COSAgentProvider` with `dashboard_dirs` (dashboards ship via `cos-agent`; no scraped endpoint)
 - [ ] [docs] Add a Grafana dashboard JSON (`src/grafana_dashboards/`) with incident and token/cost panels
-- [ ] [test] Unit-test the metrics renderer against tracker/usage fixtures
-- [ ] [test] Scenario-test the cos-agent relation (scrape target + dashboard in the databag)
+- [ ] [test] Unit-test the OTLP payload builder against tracker/usage fixtures
+- [ ] [test] Scenario-test the cos-agent relation (dashboard ships, unit stays healthy)
 
 ### 9.2. k8s (deferred)
 

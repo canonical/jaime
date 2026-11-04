@@ -857,15 +857,20 @@ and AI calls), never the monitored workload, which reports through its own
 
 - Add a `provides: cos-agent` (interface `cos_agent`) relation to the machine
   charm metadata, as a unit-level relation co-located with the principal.
-- Serve a small Prometheus `text/plain` `/metrics` endpoint with the stdlib
-  `http.server` (a background thread), bound to a fixed host port on the
-  principal's machine. It renders from data jaime already keeps - the incident
-  tracker, the audit log and the usage ledger - so no new data model is added.
+- Push OTLP metric points from the running hook process to the
+  `opentelemetry-collector` on the host: on every monitoring cycle jaime POSTs
+  an OTLP/JSON payload (stdlib only) to the co-located collector's OTLP HTTP
+  receiver (`127.0.0.1:4318`), which remote-writes it to Prometheus. There is
+  no `/metrics` server and no exporter process on jaime - it renders from data
+  it already keeps (the incident tracker and the usage ledger), so no new data
+  model is added.
 - Meter names `jaime_*`:
 
   ```text
-  # Incidents - one series per monitored unit with an open incident
-  jaime_incidents_open{unit}                    gauge
+  # Monitoring - one series per monitored unit
+  jaime_monitored_units{unit}                   gauge    (1 for every watched unit)
+  jaime_unit_unhealthy{unit}                    gauge    (1 when the unit is in a watched status)
+  jaime_incidents_open{unit}                    gauge    (1 when an incident is open)
   # AI usage - one series per model
   jaime_llm_calls_total{model}                  counter
   jaime_llm_tokens_total{model,role}            counter   (role: prompt|completion)
@@ -882,11 +887,10 @@ and AI calls), never the monitored workload, which reports through its own
   library, bundled the way `chrony-client-operator` bundles it) so the scrape
   target, dashboard and rule hand-off are handled by the shared library rather
   than hand-rolled.
-- Serving: a hook process only lives for the duration of the hook, so the
-  stdlib HTTP handler is not by itself durable. A scrapeable `/metrics` needs a
-  small systemd-managed metrics process that reads the tracker state and serves
-  between hooks, the way chrony runs its exporter. The in-process handler is
-  the first slice; the durable service is a follow-up in TASKS 9.1.
+- No daemon: the OTLP push happens inside the existing hook process as a
+  best-effort POST per `update-status`, so jaime needs no long-lived service.
+  Export to Prometheus is owned by the `opentelemetry-collector` on the host
+  (its remote-write exporter); jaime never scrapes itself.
 
 ### Kubernetes standalone (deferred)
 

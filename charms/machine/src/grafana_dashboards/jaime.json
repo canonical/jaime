@@ -1,20 +1,17 @@
 {
   "annotations": { "list": [] },
-  "description": "Jaime — CPU/incident and AI usage at a glance",
+  "description": "Jaime — incidents and AI usage at a glance",
   "id": null,
   "title": "Jaime",
   "tags": ["jaime", "cos-agent"],
   "schemaVersion": 37,
-  "version": 1,
+  "version": 2,
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Open incidents",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
       "targets": [
         {
@@ -38,14 +35,14 @@
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "Tokens by model",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "type": "stat",
+      "title": "Monitored units",
+      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
       "targets": [
         {
-          "expr": "sum by (model) (increase(jaime_llm_tokens_total[1h]))",
-          "legendFormat": "{{model}}",
+          "expr": "sum(jaime_monitored_units)",
+          "legendFormat": "units",
           "refId": "A"
         }
       ],
@@ -53,13 +50,87 @@
     },
     {
       "id": 3,
+      "type": "stat",
+      "title": "Unhealthy units",
+      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(jaime_unit_unhealthy)",
+          "legendFormat": "units",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Tokens by model",
+      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (model) (rate(jaime_llm_tokens_total[$__rate_interval]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 5,
       "type": "timeseries",
       "title": "LLM cost (USD)",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
-          "expr": "sum by (model) (increase(jaime_llm_cost_total[1h]))",
+          "expr": "sum by (model) (rate(jaime_llm_cost_total[$__rate_interval]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Token split (prompt vs completion)",
+      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (role) (rate(jaime_llm_tokens_total[$__rate_interval]))",
+          "legendFormat": "{{role}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 10, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "LLM calls",
+      "datasource": { "type": "prometheus", "uid": "${prometheusds}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (model) (rate(jaime_llm_calls_total[$__rate_interval]))",
           "legendFormat": "{{model}}",
           "refId": "A"
         }
