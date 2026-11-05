@@ -26,13 +26,29 @@ spec owns the detail and holds the only checklist; do not duplicate it in
 - Date: `YYMMDD` is the day the spec is created; the folder is never renamed
   afterwards.
 - Type: a commit type from `AGENTS.md` (`feature`, `fix`, `change`, `docs`).
-- Copy `_template/` to start a new spec.
+- Copy `_template/` to start a new spec. The template is the four-file, ready
+  shape (`Status: proposed` with `tasks.md`). To park a spec while the design is
+  still open, set `Status: in-discussion` and omit `tasks.md`; see Status.
+
+## Status
+
+`proposal.md` carries a `Status:` line:
+
+- `in-discussion` - the design is not agreed. There is no `tasks.md` and the
+  spec must not be implemented.
+- `proposed` - the design is agreed. `tasks.md` holds the checklist and the
+  work is ready.
+- `done` - implemented and closed (see Lifecycle).
+
+The presence of `tasks.md` is the readiness signal: no `tasks.md`, not ready.
 
 ## Lifecycle
 
 1. Propose: open a pull request containing only the spec folder, plus any
-   `ARCHITECTURE.md` direction change. Get it agreed.
-2. Implement per `tasks.md`. Commits use the spec's type.
+   `ARCHITECTURE.md` direction change. It starts at `Status: in-discussion` when
+   the design is still open. Get it agreed.
+2. Ready: set `Status: proposed` and add `tasks.md` with the implementation
+   checklist. Then implement per `tasks.md`. Commits use the spec's type.
 3. Close: set `Status: done` in `proposal.md`, and update the descriptive
    sections of `ARCHITECTURE.md`, `TASKS.md` and `CHANGELOG.md`. The folder
    stays in place as the decision record; there is no archive directory.
