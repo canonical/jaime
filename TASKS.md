@@ -1,7 +1,7 @@
 # Jaime Tasks
 
 Phases 0 to 3.5 are implemented. Phases 4 and 5 are the active plan; Phases 6
-to 8 are deferred.
+to 8 are deferred. Phase 9 (observability) is queued after the 0.1.2 release.
 
 Later phases and unscoped ideas still live in `ARCHITECTURE.md`, which is the
 roadmap source of truth.
@@ -771,3 +771,29 @@ implemented.
 - [ ] [test] Add a documentation link check: relative links in `README.md`, the
       other root Markdown files and `docs/` must resolve (the README had two
       broken links after the Read the Docs move)
+
+## 9. Phase 9 — Observability (cos-agent)
+
+Expose jaime's own incidents and AI usage to the Canonical Observability
+Stack through the `cos-agent` interface, mirroring `chrony-client-operator`.
+Machine subordinate first; the k8s `ServiceMonitor` variant follows. The design
+is in `ARCHITECTURE.md` (Observability).
+
+### 9.1. cos-agent relation and OTLP export (machine)
+
+- [ ] [charm] Add `provides: cos-agent` (interface `cos_agent`) to `charms/machine/charmcraft.yaml`
+- [ ] [charm] Vendor the `COSAgentProvider` library (`grafana_agent.v0.cos_agent`) into `charms/machine/lib/`
+- [ ] [python] Build an OTLP/JSON `jaime_*` metrics payload (monitoring gauges and per-model usage sums) from the status tracker and usage ledger
+- [ ] [chardm] Push the payload to the co-located `opentelemetry-collector` OTLP/HTTP receiver (`127.0.0.1:4318`) on each `update-status`, which remote-writes it to Prometheus
+- [ ] [charm] Wire `COSAgentProvider` with `dashboard_dirs` (dashboards ship via `cos-agent`; no scraped endpoint)
+- [ ] [docs] Add a Grafana dashboard JSON (`src/grafana_dashboards/`) with incident and token/cost panels
+- [ ] [test] Unit-test the OTLP payload builder against tracker/usage fixtures
+- [ ] [test] Scenario-test the cos-agent relation (dashboard ships, unit stays healthy)
+
+### 9.2. k8s (deferred)
+
+- [ ] [charm] Add `cos-agent` to `charms/k8s/` with ServiceMonitor semantics on the k8s variant
+
+### 9.3. Acceptance
+
+- [ ] [test] Integrate with a real COS agent (prometheus-scrape or an `opentelemetry-collector`) on the machine, assert `jaime_*` samples land in Prometheus and the dashboard renders in Grafana

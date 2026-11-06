@@ -10,11 +10,13 @@ requires-python = ">=3.10"
 dependencies = [
     "ops>=3.4.0",
     "websocket-client>=1.0",
+    "cosl>=0.0.50",
+    "pydantic>=2.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", ".vendored/jaime-package"]
+pythonpath = ["src", ".vendored/jaime-package", "lib"]
 
 [tool.coverage.run]
 source = ["src", ".vendored/jaime-package"]
