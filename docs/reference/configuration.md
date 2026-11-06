@@ -23,6 +23,7 @@ files.
 | `cooldown-minutes` | int | `30` | Minimum time between report versions for the same unresolved incident. |
 | `log-window-minutes` | int | `30` | How far back to collect recent logs. |
 | `max-context-lines` | int | `500` | Per-item cap on collected lines, tightened per section. Not a report or prompt total. |
+| `max-prompt-bytes` | int | `60000` | Byte budget for the prompt built from the stored report in `suggest`/`act` mode. `0` disables projection and sends the full report. |
 | `report-dir` | string | `/var/log/jaime/reports` | Directory where Markdown reports are written. |
 | `audit-log-path` | string | `/var/log/jaime/events.jsonl` | Path to the structured JSONL audit log. |
 | `diagnostics` | string | empty | Substrate-specific JSON diagnostics plan. |
@@ -155,12 +156,34 @@ log-window-minutes: 30
 
 Per-item cap on collected lines. Some sections apply a tighter cap, for example
 socket statistics and firewall rules. It is not a report or prompt total; the
-report keeps the bounded evidence, and prompt projection is a later concern.
+report keeps the bounded evidence, and `max-prompt-bytes` bounds the prompt
+built from it.
 
 Default:
 
 ```yaml
 max-context-lines: 500
+```
+
+## `max-prompt-bytes`
+
+Byte budget for the prompt sent to the AI provider in `suggest`/`act` mode.
+The stored report is never bounded by this; only the copy projected into the
+prompt is, by `jaime-package/jaime/projection.py`. Executive summary, recent
+logs, journal errors/warnings, failure indicators (failed systemd units,
+failed snap changes and logs, Kubernetes events, pod/container state) and the
+charm's available actions and links are always included and only individually
+capped. Processes, network ports, plan log files, snap status, previous
+container logs and health commands are included while the budget allows, and a
+section that does not fit is named in an omission marker instead of silently
+missing. Disk, memory, network connections, firewall rules and the full charm
+config dump are always reduced to a short digest, regardless of this budget.
+`0` disables projection: the full report is sent as the prompt.
+
+Default:
+
+```yaml
+max-prompt-bytes: 60000
 ```
 
 ## `report-dir`
