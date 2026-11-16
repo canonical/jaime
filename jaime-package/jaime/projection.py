@@ -2,9 +2,10 @@
 
 The report (``report.py``) is the persisted evidence artifact and is never
 modified by this module. The projection is a pure function of (report text,
-budget, version): the same inputs always produce byte-identical output. It is
-applied only to the copy of the report text about to enter a prompt; the file
-on disk is untouched.
+budget): the same inputs always produce byte-identical output. It is applied
+only to the copy of the report text about to enter a prompt; the file on disk
+is untouched. The projection version is recorded in the audit log beside the
+output, not passed in.
 
 Design: "Context evidence and prompt projection" in ``ARCHITECTURE.md``.
 
@@ -14,10 +15,13 @@ Tier model:
   cannot exhaust the whole budget, but the budget never drops it).
 - Tier 2 - included while the budget allows, in report order; a section that
   would not fit is omitted with an explicit marker naming it.
-- Tier 3 - a short digest only, regardless of budget; the raw content never
-  reaches the prompt.
+- Tier 3 - a short digest only, when the report is over budget; the raw content
+  never reaches the prompt.
 - Any heading not listed below defaults to Tier 2, so a future report section
   is budget-gated rather than silently bypassing the limit.
+
+The tiers apply only to an over-budget report: a report that already fits the
+budget is returned unchanged, so nothing is capped or digested.
 
 Two headings not named in ``ARCHITECTURE.md``'s tier table are pinned to
 Tier 1 here: "Available actions" and "Charm links". The suggest prompt
@@ -25,9 +29,9 @@ explicitly forbids inventing an action or a URL; dropping either under budget
 pressure would let the model do exactly that with no way to tell omission
 from absence.
 
-"Kubernetes events" is Tier 1 but not included verbatim: Warning event lines
-are kept, Normal event lines are collapsed to one count line, regardless of
-budget (the split is not itself budget-gated, the same as Tier 3 digesting).
+"Kubernetes events" is Tier 1 but not included verbatim: in the over-budget
+case, Warning event lines are kept and Normal event lines are collapsed to one
+count line (the split is not itself budget-gated).
 """
 
 import re
@@ -175,8 +179,11 @@ def _render(heading: str, body: list[str]) -> str:
 def _cap_bytes(text: str, max_bytes: int) -> str:
     """Truncate ``text`` to at most ``max_bytes``, with an omission marker.
 
-    Cuts on a line boundary so the result stays valid Markdown; the marker
-    states how many bytes were cut, never silently.
+    Cuts on a line boundary so the result stays valid Markdown, and closes an
+    open code fence before the marker: truncating inside a fenced block would
+    otherwise leave the fence unbalanced, and every later section would render
+    as part of that code block. The marker states how many bytes were cut,
+    never silently.
     """
     encoded = text.encode()
     if len(encoded) <= max_bytes:
@@ -190,6 +197,10 @@ def _cap_bytes(text: str, max_bytes: int) -> str:
             break
         kept.append(line)
         size += line_size
+    # A section may end inside a fenced code block. Close it so the truncation
+    # does not swallow the rest of the report into that block.
+    if sum(1 for line in kept if line.strip().startswith("```")) % 2 == 1:
+        kept.append("```")
     omitted = len(encoded) - size
     kept.append(f"_… {omitted} bytes omitted …_")
     return "\n".join(kept)
@@ -202,7 +213,7 @@ def _digest(heading: str, body: list[str]) -> str:
     count and the preview.
     """
     content = [line for line in body if line.strip() not in ("```",) and line.strip()]
-    chunk = [heading, f"_{len(content)} lines, digested for the prompt; see the full report for detail._"]
+    chunk = [heading, f"_{len(content)} lines, digested for the prompt; full detail omitted._"]
     preview = content[:_TIER_3_PREVIEW_LINES]
     if preview:
         chunk.extend(["```", *preview, "```"])
@@ -215,7 +226,7 @@ def _normalize(line: str) -> str:
     Collapses whitespace runs so differently-spaced renderings compare equal:
     the executive summary's error lines and the compacted timeline in "Recent
     unit logs" carry the same timestamp and message but different
-    inter-field spacing, and normalising is what lets the cross-section
+    inter-field spacing, and normalising is what lets the Tier 1
     de-duplication below catch that case.
 
     Code-fence markers (```, ```yaml, ...) are structural Markdown, not
@@ -231,33 +242,50 @@ def _normalize(line: str) -> str:
     return " ".join(line.split())
 
 
-def build_projection(report: str, budget_bytes: int, version: int = PROJECTION_VERSION) -> str:
+def build_projection(report: str, budget_bytes: int) -> str:
     """Return a bounded, relevance-ranked projection of ``report`` for a prompt.
 
     Pure: the same ``report`` and ``budget_bytes`` always produce the same
-    output. ``budget_bytes <= 0`` is a no-op (returns ``report`` unchanged),
-    since a non-positive budget cannot mean anything else. ``version`` is
-    accepted so a caller recording it alongside the output need not import
-    ``PROJECTION_VERSION`` separately, but it does not change behaviour today.
+    output. A non-positive budget, or a report that already fits the budget, is
+    a no-op (returns ``report`` unchanged): there is nothing to bound, and
+    digesting or capping a report that already fits would only lose detail. The
+    projection version is recorded alongside the output in the audit log; it is
+    not an input to this function.
     """
-    del version  # accepted for the caller's audit record; no behaviour change yet.
-    if budget_bytes <= 0:
+    if budget_bytes <= 0 or len(report.encode()) <= budget_bytes:
         return report
 
     sections = _split_sections(report)
 
     seen_lines: set[str] = set()
 
-    def dedup(body: list[str]) -> list[str]:
+    def filter_seen(body: list[str]) -> list[str]:
+        """Drop lines already emitted, without recording the kept ones.
+
+        Recording is a separate step (:func:`commit_seen`) so a line counts as
+        seen only once it actually reaches the prompt: a section that is later
+        truncated or omitted must not suppress a genuine occurrence elsewhere.
+        """
         kept = []
+        local: set[str] = set()
         for line in body:
             key = _normalize(line)
-            if key and key in seen_lines:
+            if key and (key in seen_lines or key in local):
                 continue
             if key:
-                seen_lines.add(key)
+                local.add(key)
             kept.append(line)
         return kept
+
+    def commit_seen(heading: str, text: str) -> None:
+        """Record the content lines of a section that is actually emitted."""
+        lines = text.split("\n")
+        if heading and lines and lines[0] == heading:
+            lines = lines[1:]
+        for line in lines:
+            key = _normalize(line)
+            if key:
+                seen_lines.add(key)
 
     rendered: list[str | None] = [None] * len(sections)
     used_bytes = 0
@@ -265,9 +293,11 @@ def build_projection(report: str, budget_bytes: int, version: int = PROJECTION_V
     changed_option_names: set[str] = set()
 
     # Tier 1 first: always included, each individually capped, never counted
-    # against or truncated by the budget beyond its own cap. The executive
-    # summary is always first in report order, so by the time "Charm config"
-    # (Tier 3) is reached below, changed_option_names is already populated.
+    # against or truncated by the budget beyond its own cap. De-duplication is
+    # scoped to these always-included sections, and a line is recorded as seen
+    # only once it survives the cap below. The executive summary is always
+    # first in report order, so by the time "Charm config" (Tier 3) is reached,
+    # changed_option_names is already populated.
     for i, (heading, body) in enumerate(sections):
         tier = _tier(heading)
         if tier == 1:
@@ -275,13 +305,14 @@ def build_projection(report: str, budget_bytes: int, version: int = PROJECTION_V
                 changed_option_names |= _changed_option_names(body)
             if heading == "## Kubernetes events":
                 body = _split_k8s_events(body)
-            text = _cap_bytes(_render(heading, dedup(body)), _TIER_1_SECTION_CAP_BYTES)
+            text = _cap_bytes(_render(heading, filter_seen(body)), _TIER_1_SECTION_CAP_BYTES)
             rendered[i] = text
             used_bytes += len(text.encode()) + 1
+            commit_seen(heading, text)
         elif tier == 3:
             if heading == "## Charm config":
                 body = _drop_already_mentioned_options(body, changed_option_names)
-            text = _digest(heading, dedup(body))
+            text = _digest(heading, body)
             rendered[i] = text
             used_bytes += len(text.encode()) + 1
         else:
@@ -290,11 +321,12 @@ def build_projection(report: str, budget_bytes: int, version: int = PROJECTION_V
     # Tier 2 next, in report order, first-fit against what remains of the
     # budget: a section that does not fit is skipped (not truncated) and
     # named in an omission marker placed where it would have been, so later,
-    # smaller Tier 2 sections still get a chance.
+    # smaller Tier 2 sections still get a chance. Tier 2 sections are not
+    # de-duplicated, so an omitted one never suppresses a later occurrence.
     remaining = budget_bytes - used_bytes
     for i in tier2_indices:
         heading, body = sections[i]
-        text = _render(heading, dedup(body))
+        text = _render(heading, body)
         size = len(text.encode()) + 1
         if size <= remaining:
             rendered[i] = text

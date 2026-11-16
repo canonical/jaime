@@ -1170,9 +1170,10 @@ The reasons:
 - An incident cannot be re-collected without waiting for another one. A richer
   report lets the operator re-run `get-suggestion`, with additional context,
   against evidence already on disk.
-- The projection is a deterministic function of the stored report, a budget and
-  a projection version, so it is reproducible without persisting a second
-  artifact. This requires the report to keep stable section headings.
+- The projection is a deterministic function of the stored report and the
+  budget, with the projection version recorded alongside it in the audit log, so
+  it is reproducible without persisting a second artifact. This requires the
+  report to keep stable section headings.
 
 Two categories are still filtered at collection, because sending them raw is
 unsafe or unbounded rather than merely expensive: unit and container logs
@@ -1190,32 +1191,43 @@ would erase commit SHAs, UUIDs and IDs. The audit log and the persisted
 message can still reach them.
 
 `jaime-package/jaime/projection.py` implements this: `build_projection(report,
-budget_bytes)` is a pure function that splits the rendered report on its
-``## `` headings, classifies each by the table below, and returns a bounded
-Markdown string for the prompt. Tier 1 sections are each capped individually
-(4000 bytes) but never dropped for budget; Tier 2 sections are included in
-report order while the remaining budget allows, and a section that does not
-fit is named in an omission marker rather than silently missing; Tier 3
-sections are always reduced to a short digest (a line count plus a small
-preview), regardless of budget. A heading not in the table defaults to Tier 2,
-so a future report section is budget-gated rather than silently bypassing the
-limit. Two headings not in the table are pinned to Tier 1 in the code -
-"Available actions" and "Charm links" - because dropping either lets the model
-invent an action or a URL the suggest prompt explicitly forbids inventing.
-Cross-section de-duplication works at two levels. Identical lines (after
-whitespace normalisation) are removed outright, which catches the repeated log
-line between the executive summary and "Recent unit logs". A changed config
-option is repeated in a different format between the summary (`` - `name`:
+budget_bytes)` is a pure function of the report and the budget. A report that
+already fits the budget (or a non-positive budget) is returned unchanged, so the
+projection is a no-op when there is nothing to bound; that is the common case.
+Otherwise it splits the rendered report on its ``## `` headings, classifies each
+by the table below, and returns a bounded Markdown string for the prompt.
+
+The budget is a soft target, not a hard cap. Tier 1 sections are always included
+and never dropped for budget; in the over-budget case each is capped individually
+(4000 bytes), so a prompt whose Tier 1 content alone exceeds the budget is still
+sent. Tier 2 sections are included in report order while the remaining budget
+allows, and a section that does not fit is named in an omission marker rather
+than silently missing. Tier 3 sections are reduced to a short digest (a line
+count plus a small, fixed preview) in the over-budget case. A heading not in the
+table defaults to Tier 2, so a future report section is budget-gated rather than
+silently bypassing the limit. Two headings not in the table are pinned to Tier 1
+in the code - "Available actions" and "Charm links" - because dropping either
+lets the model invent an action or a URL the suggest prompt explicitly forbids
+inventing.
+
+Cross-section de-duplication works at two levels, and only over content that
+actually reaches the prompt. Identical lines (after whitespace normalisation)
+among the always-included Tier 1 sections are removed outright, which catches
+the repeated log line between the executive summary and "Recent unit logs"; a
+line is recorded as seen only once it survives its section's own cap, so a
+truncated or omitted section never suppresses a later real occurrence. A changed
+config option is repeated in a different format between the summary (`` - `name`:
 `value` (default: `default`) ``) and "Charm config" (``name: value  # changed
-from default (...)``), so line-level dedup cannot catch it; this is matched
-by option name instead, dropping the "Charm config" repeat for any option the
+from default (...)``), so line-level dedup cannot catch it; this is matched by
+option name instead, dropping the "Charm config" repeat for any option the
 summary already named. "Kubernetes events" gets its own section-specific
 treatment rather than generic tiering: Warning lines are kept verbatim and
 Normal lines are collapsed to one count line, independent of budget.
-`max-prompt-bytes` (default 60000, 0 disables projection) configures the
-budget on both charms.
+`max-prompt-bytes` (default 60000, 0 disables projection) configures the budget
+on both charms.
 
-Per-source treatment:
+Per-source treatment (tiering and digesting apply only when the report exceeds
+the budget; a report that fits is sent unchanged):
 
 | Context item | Report (safety cap) | Prompt projection |
 | --- | --- | --- |

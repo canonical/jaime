@@ -890,6 +890,18 @@ class TestRunModeLogicProjection:
         assert self._REPORT in sent_prompt
         assert h.charm._last_projection is None
 
+    def test_report_that_fits_the_budget_is_sent_unchanged(self):
+        provider = mock.MagicMock()
+        provider.generate.return_value = ("diagnosis", None)
+        budget = len(self._REPORT.encode()) + 1000
+        h = self._harness_with_provider(
+            {"mode": "suggest", "provider": "gemini", "api-token": "t", "max-prompt-bytes": budget}, provider
+        )
+        h.charm._run_mode_logic(self._REPORT)
+        sent_prompt = provider.generate.call_args[0][0]
+        assert self._REPORT in sent_prompt
+        assert h.charm._last_projection["report_bytes"] == h.charm._last_projection["prompt_bytes"]
+
     def test_nonzero_budget_projects_the_prompt_not_the_report(self):
         provider = mock.MagicMock()
         provider.generate.return_value = ("diagnosis\n```bash\ncmd\n```", None)

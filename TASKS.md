@@ -682,26 +682,34 @@ Tier model:
 - Tier 3 — digest only, never raw: disk, memory, `ss` connections, firewall
   rules, full charm and Juju config dumps
 
+When the report already fits `max-prompt-bytes`, the projection is a no-op: the
+report is sent unchanged, so nothing is capped or digested. The tier model below
+applies only to an over-budget report.
+
 - [x] [project] Revise the descriptive `ARCHITECTURE.md` statements when the
       projection lands: "there is no separate raw context bundle" and "the AI is
       given the stored report". The design is already recorded under "Context
       evidence and prompt projection"
-- [x] [python] Build the projection as a pure function of the stored report, a
-      budget and a projection version, so it is reproducible without persisting a
-      second artifact. This requires the report to keep stable section headings
+- [x] [python] Build the projection as a pure function of the stored report and
+      the budget, so it is reproducible without persisting a second artifact;
+      the projection version is recorded in the audit event rather than passed
+      to the function. This requires the report to keep stable section headings
 - [x] [python] Keep pod events' repeat count visible (`get_pod_events` now
       renders the event's own `count` as a `×N` suffix instead of discarding
       it) and tier "Kubernetes events" as Warning kept verbatim, Normal
       collapsed to one count line - implemented as a section-specific text
       parse in `projection.py` rather than restructuring `k8s_events` into
       dicts through `collector.py` and `report.py`, which stayed unchanged
-- [x] [python] Add a global prompt budget (`max-prompt-bytes`): Tier 1 always
-      fits (individually capped, not budget-gated), Tier 2 included while the
-      budget allows, Tier 3 always reduced to digests, with explicit omission
-      markers naming the section that did not fit
-- [x] [python] De-duplicate identical lines across sections (after whitespace
-      normalisation): the summary's error lines no longer repeat verbatim in
-      "Recent unit logs"
+- [x] [python] Add a global prompt budget (`max-prompt-bytes`): a report that
+      already fits is sent unchanged; otherwise Tier 1 always fits (individually
+      capped, not budget-gated), Tier 2 included while the budget allows, Tier 3
+      reduced to digests, with explicit omission markers naming the section that
+      did not fit
+- [x] [python] De-duplicate identical lines across the always-included Tier 1
+      sections (after whitespace normalisation), recording a line as seen only
+      once it survives its section's own cap: the summary's error lines no
+      longer repeat verbatim in "Recent unit logs", and a truncated or omitted
+      section never suppresses a later real occurrence
 - [x] [python] De-duplicate a changed config option between the executive
       summary and "Charm config" by option name, since the two sections use
       different line formats and the line-level dedup above does not catch it
