@@ -173,6 +173,12 @@ llms_txt_description = textwrap.dedent(
     """
 )
 
+# The markdown builder that sphinx-llm drives cannot render every node; the
+# sphinx-design card markup in index.md yields an "unknown node type"
+# warning, and `make html` runs with --fail-on-warning, so the build fails.
+# Suppress that one node class; the node is still omitted from the Markdown.
+llms_txt_suppress_unknown_node_warnings = ["PassthroughTextElement"]
+
 # The base URL for references built by sphinx-markdown-builder.
 if os.environ.get("READTHEDOCS"):
     markdown_http_base = html_baseurl
