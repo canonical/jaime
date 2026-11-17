@@ -88,6 +88,7 @@ jaime-package/jaime/        shared code
   controller.py             Juju controller API client (used by the k8s charm)
   logging.py, logutils.py   JSONL audit log, log filtering/de-duplication
   redact.py                 secret redaction for report values and free text
+  projection.py              bounded, relevance-ranked prompt view of a report (`max-prompt-bytes`)
   providers/                base (shared HTTP + OpenAI-chat plumbing), gemini, openrouter, remote
 
 charms/machine/src/
@@ -212,10 +213,12 @@ evidence earlier turns were based on.
 
 The Markdown report is always generated from collected evidence alone. The
 non-AI Markdown report containing that evidence is persisted before the
-provider is called. The AI is then given the stored report as its input, and
-its output is attached to the incident record rather than merged into the
-report file. There is no separate raw context bundle: the report is the
-persisted evidence artifact.
+provider is called. The AI is then given a bounded projection of the stored
+report as its input (see "Context evidence and prompt projection"), and its
+output is attached to the incident record rather than merged into the report
+file. There is no separate raw context bundle: the projection is computed from
+the report on the fly, not persisted as a second artifact, and the report
+remains the persisted evidence artifact.
 
 Context collection on the machine substrate:
 
@@ -1170,9 +1173,10 @@ The reasons:
 - An incident cannot be re-collected without waiting for another one. A richer
   report lets the operator re-run `get-suggestion`, with additional context,
   against evidence already on disk.
-- The projection is a deterministic function of the stored report, a budget and
-  a projection version, so it is reproducible without persisting a second
-  artifact. This requires the report to keep stable section headings.
+- The projection is a deterministic function of the stored report and the
+  budget, with the projection version recorded alongside it in the audit log, so
+  it is reproducible without persisting a second artifact. This requires the
+  report to keep stable section headings.
 
 Two categories are still filtered at collection, because sending them raw is
 unsafe or unbounded rather than merely expensive: unit and container logs
@@ -1189,11 +1193,44 @@ would erase commit SHAs, UUIDs and IDs. The audit log and the persisted
 `status-state.json` are out of scope: a token embedded in a workload status
 message can still reach them.
 
-The descriptive statements that "there is no separate raw context bundle" and
-that "the AI is given the stored report" (see Incident flow and Optional AI
-diagnosis) are revised when the projection lands, not before.
+`jaime-package/jaime/projection.py` implements this: `build_projection(report,
+budget_bytes)` is a pure function of the report and the budget. A report that
+already fits the budget (or a non-positive budget) is returned unchanged, so the
+projection is a no-op when there is nothing to bound; that is the common case.
+Otherwise it splits the rendered report on its ``## `` headings, classifies each
+by the table below, and returns a bounded Markdown string for the prompt.
 
-Per-source treatment:
+The budget is a soft target, not a hard cap. Tier 1 sections are always included
+and never dropped for budget; in the over-budget case each is capped individually
+(4000 bytes), so a prompt whose Tier 1 content alone exceeds the budget is still
+sent. Tier 2 sections are included in report order while the remaining budget
+allows, and a section that does not fit is named in an omission marker rather
+than silently missing. Tier 3 sections are reduced to a short digest (a line
+count plus a small, fixed preview) in the over-budget case. A heading not in the
+table defaults to Tier 2, so a future report section is budget-gated rather than
+silently bypassing the limit. Two headings not in the table are pinned to Tier 1
+in the code - "Available actions" and "Charm links" - because dropping either
+lets the model invent an action or a URL the suggest prompt explicitly forbids
+inventing.
+
+Cross-section de-duplication works at two levels, and only over content that
+actually reaches the prompt. Identical lines (after whitespace normalisation)
+among the always-included Tier 1 sections are removed outright, which catches
+the repeated log line between the executive summary and "Recent unit logs"; a
+line is recorded as seen only once it survives its section's own cap, so a
+truncated or omitted section never suppresses a later real occurrence. A changed
+config option is repeated in a different format between the summary (`` - `name`:
+`value` (default: `default`) ``) and "Charm config" (``name: value  # changed
+from default (...)``), so line-level dedup cannot catch it; this is matched by
+option name instead, dropping the "Charm config" repeat for any option the
+summary already named. "Kubernetes events" gets its own section-specific
+treatment rather than generic tiering: Warning lines are kept verbatim and
+Normal lines are collapsed to one count line, independent of budget.
+`max-prompt-bytes` (default 60000, 0 disables projection) configures the budget
+on both charms.
+
+Per-source treatment (tiering and digesting apply only when the report exceeds
+the budget; a report that fits is sent unchanged):
 
 | Context item | Report (safety cap) | Prompt projection |
 | --- | --- | --- |
@@ -1210,7 +1247,7 @@ Per-source treatment:
 | environment variables | names and set/unset, never values | Tier 2 |
 | plan item counts | per-section item caps | - |
 | k8s unit logs | per container and per pod capped | Tier 1 |
-| k8s events | fetched, sorted, Warning kept and Normal counted | Tier 1 (Warning), rest counted |
+| k8s events | fetched, sorted, the event repeat count rendered (`×N`) | Tier 1, Warning lines verbatim, Normal lines collapsed to one count line |
 | k8s pod and containers | current and last state, init containers | Tier 1 |
 | k8s previous-container logs | bounded, only when restarted | Tier 2 |
 | snap status and services | `max-context-lines` | Tier 2 |
@@ -1228,11 +1265,11 @@ Run all three unit suites and lint on every change, add integration tests that d
 
 ## Phase 6 – Deferred and follow-up work
 
-Work consciously left out of the 0.1.0 release, tracked so it is not lost: the
-prompt budget and compaction projection (designed under
-[Context evidence and prompt projection](#context-evidence-and-prompt-projection)),
-a Kubernetes integration job in CI, release automation, and a small set of
-Phase 1 leftovers. The task breakdown is in `TASKS.md` 6.
+Work consciously left out of the 0.1.0 release, tracked so it is not lost: a
+Kubernetes integration job in CI, release automation, and a small set of Phase
+1 leftovers. The prompt budget and compaction projection, designed under
+[Context evidence and prompt projection](#context-evidence-and-prompt-projection),
+has shipped. The task breakdown is in `TASKS.md` 6.
 
 ## Phase 7 – Clustered operation for machine charms
 

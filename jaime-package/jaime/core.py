@@ -34,6 +34,7 @@ from jaime.controller import (
 from jaime.incident import Incident, Suggestion, Turn
 from jaime.logging import write_event
 from jaime.modes import Mode, Provider
+from jaime.projection import PROJECTION_VERSION, build_projection
 from jaime.report import generate_report
 from jaime.suggest import run_ask, run_suggest
 from jaime.timeutil import parse_ts, utc_now, utc_now_iso
@@ -370,6 +371,7 @@ class CoreMixin(ActionsMixin):
         calls the provider.
         """
         self._last_ai_error = ""
+        self._last_projection = None
 
         def fail(message: str) -> None:
             self._last_ai_error = message
@@ -394,10 +396,26 @@ class CoreMixin(ActionsMixin):
             fail(f"AI provider error: {err[:100]}")
             return None
 
+        # Bound the prompt built from the stored report; the report file on
+        # disk is untouched. 0 (or an unset option, in a test harness that
+        # does not declare it) disables projection: the full report is sent.
+        budget = self.model.config.get("max-prompt-bytes", 0)
+        prompt_report = build_projection(report_content, budget)
+        self._last_projection = (
+            {
+                "version": PROJECTION_VERSION,
+                "budget_bytes": budget,
+                "report_bytes": len(report_content.encode()),
+                "prompt_bytes": len(prompt_report.encode()),
+            }
+            if budget > 0
+            else None
+        )
+
         try:
             if question:
-                return run_ask(provider, report_content, question, history)
-            return run_suggest(provider, report_content, additional_context)
+                return run_ask(provider, prompt_report, question, history)
+            return run_suggest(provider, prompt_report, additional_context)
         except Exception as e:
             logger.error("AI provider call failed: %s", traceback.format_exc())
             fail(f"AI provider error: {str(e)[:100]}")
@@ -451,6 +469,8 @@ class CoreMixin(ActionsMixin):
 
         now = utc_now_iso()
         extra = {"usage": turn.usage.to_dict()} if turn.usage is not None else {}
+        if getattr(self, "_last_projection", None) is not None:
+            extra["projection"] = self._last_projection
         self._audit(
             "suggestion-generated",
             now,
