@@ -28,7 +28,8 @@ Juju model
         ├── incident tracker
         ├── JSONL audit logger
         ├── report generator
-        └── AI provider adapter, optional
+        ├── AI provider adapter, optional
+        └── cos-agent provider + `/metrics` endpoint, opt-in by relation
 ```
 
 ### Kubernetes standalone
@@ -840,6 +841,74 @@ yields no command, never a guessed one.
 AI output is never the only record. The non-AI Markdown report containing the
 collected evidence is persisted before the provider is called, and the
 suggestion references the incident it was generated from.
+
+## Observability
+
+Jaime exposes its own operation - incidents, AI usage, provider and model - to
+the Canonical Observability Stack (COS) through the standard `cos-agent`
+interface, mirroring how `chrony-client-operator` does it. Jaime is the
+*provider* side: it serves a Prometheus-format `/metrics` endpoint and hands the
+COS agent the scrape target and a shipped Grafana dashboard over the
+`cos-agent` relation databag. This telemetry is about **jaime** (its incidents
+and AI calls), never the monitored workload, which reports through its own
+`cos-agent`.
+
+### Machine subordinate (first slice)
+
+- Add a `provides: cos-agent` (interface `cos_agent`) relation to the machine
+  charm metadata, as a unit-level relation co-located with the principal.
+- Push OTLP metric points from the running hook process to the
+  `opentelemetry-collector` on the host: on every monitoring cycle jaime POSTs
+  an OTLP/JSON payload (stdlib only) to the co-located collector's OTLP HTTP
+  receiver (`127.0.0.1:4318`), which remote-writes it to Prometheus. There is
+  no `/metrics` server and no exporter process on jaime - it renders from data
+  it already keeps (the incident tracker and the usage ledger), so no new data
+  model is added.
+- Meter names `jaime_*`:
+
+  ```text
+  # Monitoring - one series per monitored unit
+  jaime_monitored_units{unit}                   gauge    (1 for every watched unit)
+  jaime_unit_unhealthy{unit}                    gauge    (1 when the unit is in a watched status)
+  jaime_incidents_open{unit}                    gauge    (1 when an incident is open)
+  # AI usage - one series per model
+  jaime_llm_calls_total{model}                  counter
+  jaime_llm_tokens_total{model,role}            counter   (role: prompt|completion)
+  jaime_llm_cost_total{model}                   counter   (USD, providers that report it)
+  ```
+
+  `prompt_tokens`, `completion_tokens`, `cost_usd` and `model` come straight
+  from `UsageMetadata`; open incidents from the status tracker.
+- Ship a Grafana dashboard JSON under `src/grafana_dashboards/` (incident +
+  token/cost panels) and, later, Prometheus alert rules under
+  `src/prometheus_alert_rules/`. Both are uploaded by the `cos-agent`
+  provider.
+- Use the vendored `COSAgentProvider` (the `grafana_agent.v0.cos_agent`
+  library, bundled the way `chrony-client-operator` bundles it) so the scrape
+  target, dashboard and rule hand-off are handled by the shared library rather
+  than hand-rolled.
+- No daemon: the OTLP push happens inside the existing hook process as a
+  best-effort POST per `update-status`, so jaime needs no long-lived service.
+  Export to Prometheus is owned by the `opentelemetry-collector` on the host
+  (its remote-write exporter); jaime never scrapes itself.
+
+### Kubernetes standalone (deferred)
+
+The k8s variant will provide `cos-agent` with `ServiceMonitor` semantics (the
+same interface; the COS scraper collects through the Service). Not part of this
+slice; see TASKS.
+
+### Boundaries and costs
+
+- The endpoint is about jaime only; the principal charm owns its own `cos-agent`.
+  There is no standalone exporter binary (jaime has none, and a pure-Python
+  handler covers the small endpoint - this differs from chrony, which runs a
+  compiled Go exporter). No HTTP endpoint is added to the monitored workload.
+- Metrics are read-only and advisory; nothing is injected into jaime's incident
+  lifecycle.
+- A fixed host port must stay free next to the principal's workload. The scrape
+  target flows through the relation, so an `opentelemetry-collector`,
+  `prometheus-scrape` or `grafana-agent` can all collect it.
 
 ## Filesystem layout
 

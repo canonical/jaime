@@ -6,6 +6,7 @@ import json
 import logging
 import os
 
+from charms.grafana_agent.v0.cos_agent import COSAgentProvider
 from ops import JujuContext
 from ops.charm import CharmBase
 from ops.framework import StoredState
@@ -28,6 +29,7 @@ from jaime.diagnostics import (
     validate_diagnostics,
     write_diagnostics_file,
 )
+from jaime.metrics import push_metrics
 from jaime.names import app_of
 from jaime.principal import StatusTracker
 from jaime.timeutil import utc_now_iso
@@ -39,11 +41,16 @@ class JaimeCharm(CoreMixin, CharmBase):
     _diagnostics_dir = "/var/lib/jaime"
     _diagnostics_path = f"{_diagnostics_dir}/diagnostics.json"
     _context_dir = "/var/lib/jaime/incidents"
+    _dashboard_dir = "src/grafana_dashboards"
     _stored = StoredState()
 
     def __init__(self, *args):
         super().__init__(*args)
         self._status_tracker = StatusTracker()
+        self._cos_agent = COSAgentProvider(
+            self,
+            dashboard_dirs=[self._dashboard_dir],
+        )
         # Whether the plan on disk came from the diagnostics option, so that
         # clearing the option regenerates it instead of keeping a stale plan.
         self._stored.set_default(diagnostics_from_config=False)
@@ -65,6 +72,7 @@ class JaimeCharm(CoreMixin, CharmBase):
         self.framework.observe(self.on.reset_action, self._on_action_reset)
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Monitoring
     # ------------------------------------------------------------------
 
@@ -85,6 +93,7 @@ class JaimeCharm(CoreMixin, CharmBase):
     def _on_update_status(self, event):
         with self._hook_cache():
             self._monitor()
+            push_metrics(self._status_tracker)
 
     def _monitor(self):
         """Observe the principal and co-located units, then drive their incidents."""
