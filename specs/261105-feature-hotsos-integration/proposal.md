@@ -24,11 +24,17 @@ versions). Feeding that into the report and prompt would:
 
 ## What changes
 
-Candidates, pending the design:
-
-- a hotsos collection path and/or a `run-hotsos` action;
-- an opt-in `## Hotsos analysis` report section;
-- a config option to enable hotsos.
+- `enable-hotsos` (bool, default `false`) is the single switch. When true,
+  jaime runs hotsos against the live host during collection and adds a
+  `## Hotsos analysis` short-digest section to the report.
+- Install is PATH-first: a `hotsos` already on `PATH` is used as-is; otherwise
+  jaime installs a code-pinned `hotsos` into an isolated venv under
+  `/var/lib/jaime/hotsos/`, bounded by a wall-clock timeout and attempted once.
+- `hotsos-plugins` (string, default empty) selects the plugins: empty means
+  `system`, `juju` and a matching application plugin when one exists; a set
+  value is used verbatim.
+- A `run-hotsos` action runs hotsos on demand: `short` (default) returns the
+  digest; `full` writes the raw JSON to a file and returns its path.
 
 ## Not changing
 
@@ -37,8 +43,19 @@ Candidates, pending the design:
 - No k8s support: `jaime-k8s` has no host data root, and hotsos is not a
   cluster or Kubernetes-API analyzer.
 - No automatic remediation. hotsos output is advisory evidence.
+- Not a build-time dependency: hotsos (and the Sphinx stack it pulls in) is
+  never in the charm's own environment.
+- No sosreport/`data-root` analysis: live host only for now.
+- No dedicated `hotsos` subordinate charm (longer-term direction, see
+  `design.md`).
 
 ## Impact
 
-To be determined once the design converges: collector, config, report and
-projection, tests and docs.
+- Machine `collector.py`: a new, opt-in collection step and the install
+  reconcile on `config-changed`.
+- `report.py`: a new `## Hotsos analysis` section, rendered like every other
+  and therefore redacted on write (4.9).
+- `config.yaml`: `enable-hotsos` and `hotsos-plugins`.
+- Prompt projection (6.1): `## Hotsos analysis` is Tier 1.
+- `actions.yaml` / `actions.py`: the `run-hotsos` action.
+- Tests, docs and the `ARCHITECTURE.md` direction note.
