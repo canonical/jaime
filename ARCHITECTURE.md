@@ -1263,4 +1263,5 @@ Unordered and not committed. Recorded so the direction is not lost.
 - **External artifact sink** — forward the audit log and reports to Loki or object storage rather than relying on pod-local disk.
 - **Kubernetes per-cycle consolidation** — one controller connection and one pod index per monitoring cycle rather than per watched unit. See [Kubernetes monitoring cycle](#kubernetes-monitoring-cycle).
 - **Audit-log completeness** — write `still-unhealthy` and `incident-recovered` to `events.jsonl`, not only to the debug log.
+- **hotsos as an optional diagnostic provider** — machine charm only, opt-in via `enable-hotsos`. hotsos runs against the live host and its short digest is distilled through secret redaction (4.9) and prompt projection (6.1). It is obtained `PATH`-first, otherwise from a pinned, isolated venv under the charm's data directory. Spec: `specs/261105-feature-hotsos-integration/` (in discussion).
 

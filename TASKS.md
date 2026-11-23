@@ -771,3 +771,8 @@ implemented.
 - [ ] [test] Add a documentation link check: relative links in `README.md`, the
       other root Markdown files and `docs/` must resolve (the README had two
       broken links after the Read the Docs move)
+- [ ] [python] Integrate hotsos as an optional diagnostic provider (machine
+      only): opt-in `enable-hotsos`, `PATH`-first with a pinned isolated-venv
+      install, short digest distilled through 4.9 (secret redaction) and 6.1
+      (prompt compaction). Spec: `specs/261105-feature-hotsos-integration/`
+      (in discussion)
