@@ -31,4 +31,4 @@ sphinx-llm~=1.1
 
 # Vale dependencies
 rst2html
-vale==3.27.0.0
+vale==3.28.1.0
